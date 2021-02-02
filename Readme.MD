@@ -1,5 +1,5 @@
 # Diverse Video Generation
-This is code for the paper [Diverse Video Generation using a Gaussian Process Trigger](https://openreview.net/forum?id=Qm7R_SdqTpT) by Gaurav Shrivastava(https://www.cs.umd.edu/~gauravsh/) and Abhinav Shrivastava(https://www.cs.umd.edu/~abhinav/). 
+This is code for the paper [Diverse Video Generation using a Gaussian Process Trigger](https://openreview.net/forum?id=Qm7R_SdqTpT) by [Gaurav Shrivastava](https://www.cs.umd.edu/~gauravsh/) and [Abhinav Shrivastava](https://www.cs.umd.edu/~abhinav/). 
 
 
 
