@@ -12,8 +12,8 @@ where /my/kth/data/path/ is the directory the data will be downloaded into. Next
 ```
 python data/convert_lua_pytorch.py
 ```
-The ```--imageSize``` flag specifiec the image resolution. Experimental results in the paper used 128x128, but you can also train a model on 64x64 and it will train much faster.
-To train the SVG-FP model on 64x64 KTH videos run:
+Experimental results in the paper used 64x64.
+To train the DVG model on 64x64 KTH videos run:
 ```
 python DVG.py 
 ```
