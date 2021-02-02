@@ -8,7 +8,7 @@ First download the KTH action recognition dataset by running:
 ```
 sh data/download_kth.sh /my/kth/data/path/
 ```
-where /my/kth/data/path/ is the directory the data will be downloaded into. Next, convert the downloaded .avi files into .png's for the data loader. To do this you'll want [ffmpeg](https://ffmpeg.org/) installed. The following script will do the conversion, but beware, it's written in lua (sorry!):
+where /my/kth/data/path/ is the directory the data will be downloaded into. Next, convert the downloaded .avi files into .png's for the data loader. To do this you'll want [ffmpeg](https://ffmpeg.org/) installed. The following script will do the conversion:
 ```
 python data/convert_lua_pytorch.py
 ```
@@ -18,4 +18,4 @@ To train the DVG model on 64x64 KTH videos run:
 python DVG.py 
 ```
 
-<img src='Results/QualitativeResults_DVG.gif' align="center" width=360>
+<img src='Results/QualitativeResults_DVG.gif' align="center" width=630 height="480">
