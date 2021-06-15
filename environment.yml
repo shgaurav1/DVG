@@ -12,7 +12,9 @@ dependencies:
   - scipy=1.1.0
   - torchvision=0.4.0
   - pip:
+    - future==0.18.2
+    - gpytorch==0.3.0
     - ipython==7.24.1
     - progressbar==2.5
-    - gpytorch==0.3.0
+    - tensorboard==2.5.0
 

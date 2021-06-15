@@ -1,5 +1,7 @@
+__pycache__
 data/processed
 data/raw
-model_dump
 gifs
-__pycache__
+imgs
+model_dump
+runs

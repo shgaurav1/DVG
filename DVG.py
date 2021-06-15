@@ -11,6 +11,7 @@ import progressbar, pdb
 import numpy as np
 import gpytorch
 from models.gp_models import GPRegressionLayer1
+from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 
 
@@ -56,6 +57,7 @@ print('Using device:', device)
 
 home_dir = Path(opt.home_dir)
 
+writer = SummaryWriter()
 
 torch.cuda.manual_seed_all(opt.seed)
 dtype = torch.cuda.FloatTensor
@@ -210,6 +212,9 @@ def train(x,epoch):
 
 
     loss = 1000*ae_mse + 1000*mse+ 1000*mse_latent +mse_gp + max_ll.sum()  # + kld*opt.beta
+
+    writer.add_scalar("Loss/train", loss, epoch)
+
     loss.backward()
 
     frame_predictor_optimizer.step()
@@ -218,7 +223,7 @@ def train(x,epoch):
     optimizer.step()
 
 
-    return mse_latent.data.cpu().numpy()/(opt.n_past+opt.n_future),mse_latent.data.cpu().numpy()/(opt.n_past+opt.n_future)
+    return mse_latent.data.cpu().numpy()/(opt.n_past+opt.n_future)
 
 
 
@@ -298,8 +303,9 @@ def plot(x, epoch):
                 row.append(gen_seq[s][t][i])
             gifs[t].append(row)
 
-    # fname = 'end2end_kth_gp_ctrl_sample_%d.png' % ( epoch) 
-    # utils.save_tensors_image(fname, to_plot)
+    img_path = home_dir / f'imgs/end2end_kth_gp_ctrl_sample_{epoch}.png'
+    img_path.parent.mkdir(parents=True, exist_ok=True)
+    utils.save_tensors_image(str(img_path), to_plot)
 
     gif_path = home_dir / f'gifs/end2end_kth_gp_ctrl_sample_{epoch}.gif'
     gif_path.parent.mkdir(parents=True, exist_ok=True)
@@ -325,13 +331,13 @@ with gpytorch.settings.max_cg_iterations(45):
             
             progress.update(i+1)
             x,y = next(training_batch_generator)
-            mse_ctrl, indices = train(x,epoch) 
+            mse_ctrl = train(x,epoch) 
             epoch_mse += mse_ctrl 
 
         progress.finish()
         utils.clear_progressbar()
 
-        print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, epoch_mse/opt.epoch_size, epoch*opt.epoch_size*opt.batch_size, indices))
+        print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, epoch_mse/opt.epoch_size, epoch*opt.epoch_size*opt.batch_size, mse_ctrl))
         if epoch % 4 == 0:
         
             # plot some stuff
@@ -357,3 +363,4 @@ with gpytorch.settings.max_cg_iterations(45):
 
         if epoch % 10 == 0:
             print('log dir: %s' % opt.log_dir)
+    writer.flush()
