@@ -1,17 +1,30 @@
 # Diverse Video Generation
 This is code for the paper [Diverse Video Generation using a Gaussian Process Trigger](https://openreview.net/forum?id=Qm7R_SdqTpT) by [Gaurav Shrivastava](https://www.cs.umd.edu/~gauravsh/) and [Abhinav Shrivastava](https://www.cs.umd.edu/~abhinav/). 
 
+## Environment
+1. Ensure you have [anaconda](https://www.anaconda.com/download/) installed and run:
+    ```bash
+    conda env create -f environment.yml # Creates environment
+    conda activate dvg                  # Activates environment
+    ```
+2. Install torch following the instructions here [torch.ch/docs/getting-started.html](torch.ch/docs/getting-started.html). This will make it possible to run lua scripts in this repository.
+
+3. Install [ffmpeg](https://ffmpeg.org/), this is needed for converting .avi file into .png files for the data loader.
 
 
 ## KTH action dataset
-First download the KTH action recognition dataset by running:
-```
+```bash
+# Download the dataset
 sh data/download_kth.sh /my/kth/data/path/
+
+# Convert .avi to .png files
+th data/convert_kth.lua --imageSize 64 --dataRoot /my/kth/data/path/
+
+# Create metadata
+python data/meta_creator.py
 ```
-where /my/kth/data/path/ is the directory the data will be downloaded into. Next, convert the downloaded .avi files into .png's for the data loader. To do this you'll want [ffmpeg](https://ffmpeg.org/) installed. The following script will do the conversion:
-```
-python data/convert_lua_pytorch.py
-```
+
+## Training the model
 Experimental results in the paper used 64x64.
 To train the DVG model on 64x64 KTH videos run:
 ```

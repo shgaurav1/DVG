@@ -27,9 +27,9 @@ class KTH(object):
 
         self.data= {}
         for c in self.classes:
-            f = open('%s/%s/%s_meta%dx%d.json' % (self.data_root, c, data_type, image_size, image_size))
-            print(f)
-            self.data[c] = json.load(f) # self.data[c] = load_lua('%s/%s/%s_meta%dx%d.t7' % (self.data_root, c, data_type, image_size, image_size))
+            file = f'{self.data_root}/{c}/{data_type}_meta{image_size}x{image_size}.json'
+            with open(file) as f:
+                self.data[c] = json.load(f)
      
 
         self.seed_set = False

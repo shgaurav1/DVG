@@ -1,0 +1,5 @@
+data/processed
+data/raw
+model_dump
+gifs
+__pycache__

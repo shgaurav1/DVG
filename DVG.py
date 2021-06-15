@@ -1,19 +1,18 @@
+import warnings
+warnings.simplefilter("ignore", UserWarning)
+
 import torch
-import torch.optim as optim
 import torch.nn as nn
 import argparse
-import os
 import random
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import utils
-import itertools
-import progressbar,pdb
+import progressbar, pdb
 import numpy as np
 import gpytorch
-import losses
-from matplotlib import pyplot as plt
 from models.gp_models import GPRegressionLayer1
+from pathlib import Path
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', default=0.002, type=float, help='learning rate')
@@ -22,8 +21,7 @@ parser.add_argument('--batch_size', default=50, type=int, help='batch size')
 parser.add_argument('--log_dir', default='logs_final_version_gp', help='base directory to save logs')
 parser.add_argument('--model_dir', default='', help='base directory to save logs')
 parser.add_argument('--name', default='', help='identifier for directory')
-# parser.add_argument('--data_root', default='data', help='root directory for data')
-parser.add_argument('--data_root', default='/vulcan/scratch/gauravs/svg/data/kth', help='root directory for data')
+parser.add_argument('--data_root', default='data', help='root directory for data')
 parser.add_argument('--optimizer', default='adam', help='optimizer to train with')
 parser.add_argument('--niter', type=int, default=601, help='number of epochs to train for')
 parser.add_argument('--seed', default=1, type=int, help='manual seed')
@@ -45,12 +43,20 @@ parser.add_argument('--model', default='dcgan', help='model type (dcgan | vgg)')
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
 parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
+parser.add_argument('--model_path', type=str, default='', help='model pth file with which to resume training')
+parser.add_argument('--home_dir', type=str, default='.', help='Where to save gifs, models, etc')
 
 
 opt = parser.parse_args()
 print("Random Seed: ", opt.seed)
 random.seed(opt.seed)
 torch.manual_seed(opt.seed)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print('Using device:', device)
+
+home_dir = Path(opt.home_dir)
+
+
 torch.cuda.manual_seed_all(opt.seed)
 dtype = torch.cuda.FloatTensor
 
@@ -74,28 +80,30 @@ test_loader = DataLoader(test_data,
 
 print(opt)
 
-# ---------------- initialize the new model -------------
+if opt.model_path == '':
 
-# import models.dcgan_64 as model
-# import models.lstm as lstm_models
-# encoder = model.encoder(opt.g_dim, opt.channels)
-# decoder = model.decoder(opt.g_dim, opt.channels)
-# encoder.apply(utils.init_weights)
-# decoder.apply(utils.init_weights)
+    # ---------------- initialize the new model -------------
 
-# frame_predictor = lstm_models.lstm(opt.g_dim, opt.g_dim, opt.rnn_size, opt.predictor_rnn_layers, opt.batch_size)
-# frame_predictor.apply(utils.init_weights)
+    import models.dcgan_64 as model
+    import models.lstm as lstm_models
+    encoder = model.encoder(opt.g_dim, opt.channels)
+    decoder = model.decoder(opt.g_dim, opt.channels)
+    encoder.apply(utils.init_weights)
+    decoder.apply(utils.init_weights)
 
+    frame_predictor = lstm_models.lstm(opt.g_dim, opt.g_dim, opt.rnn_size, opt.predictor_rnn_layers, opt.batch_size)
+    frame_predictor.apply(utils.init_weights)
 
-# ---------------- load the trained model -------------
+else:
+    # ---------------- load the trained model -------------
 
-from models.gp_models import GPRegressionLayer1
+    from models.gp_models import GPRegressionLayer1
 
+    model = torch.load(opt.model_path)#kth_gp_multitask_3_252#e2e_2_kth_model_60
+    encoder = model['encoder']
+    decoder = model['decoder']
+    frame_predictor = model['frame_predictor']
 
-model = torch.load('./model_dump/kth_gp_multitask_3_252.pth')#kth_gp_multitask_3_252#e2e_2_kth_model_60
-encoder = model['encoder']
-decoder = model['decoder']
-frame_predictor = model['frame_predictor']
 # ---------------- models tranferred to GPU ----------------
 encoder.cuda()
 decoder.cuda()
@@ -109,10 +117,13 @@ decoder_optimizer = torch.optim.Adam(decoder.parameters(),lr = 0.002)
 
 
 # ---------------- GP initialization ----------------------
+from models.gp_models import GPRegressionLayer1
 gp_layer = GPRegressionLayer1().cuda()#inputs
 likelihood = gpytorch.likelihoods.GaussianLikelihood(batch_size=opt.g_dim).cuda()
-likelihood.load_state_dict(model['likelihood'])
-gp_layer.load_state_dict(model['gp_layer'])
+
+if opt.model_path:
+    likelihood.load_state_dict(model['likelihood'])
+    gp_layer.load_state_dict(model['gp_layer'])
 
 
 # ---------------- GP optimizer initialization ----------------------
@@ -287,11 +298,12 @@ def plot(x, epoch):
                 row.append(gen_seq[s][t][i])
             gifs[t].append(row)
 
-    # fname = '/vulcanscratch/gauravsh/dvg/end2end_kth_gp_ctrl_sample_%d.png' % ( epoch) 
+    # fname = 'end2end_kth_gp_ctrl_sample_%d.png' % ( epoch) 
     # utils.save_tensors_image(fname, to_plot)
 
-    fname = '/vulcanscratch/gauravsh/dvg/end2end_kth_gp_ctrl_sample_%d.gif' % (epoch) 
-    utils.save_gif(fname, gifs)
+    gif_path = home_dir / f'gifs/end2end_kth_gp_ctrl_sample_{epoch}.gif'
+    gif_path.parent.mkdir(parents=True, exist_ok=True)
+    utils.save_gif(str(gif_path), gifs)
 
 
 
@@ -322,7 +334,7 @@ with gpytorch.settings.max_cg_iterations(45):
         print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, epoch_mse/opt.epoch_size, epoch*opt.epoch_size*opt.batch_size, indices))
         if epoch % 4 == 0:
         
-        # plot some stuff    
+            # plot some stuff
             frame_predictor.eval()
             gp_layer.eval()
             likelihood.eval()
@@ -330,7 +342,9 @@ with gpytorch.settings.max_cg_iterations(45):
             test_x,targets = next(testing_batch_generator)
             plot(test_x, epoch)
 
-        # save the model
+            # save the model
+            model_path = home_dir / f'model_dump/e2e_kth_model_{epoch}.pth'
+            model_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save({
                 'encoder': encoder,
                 'decoder': decoder,
@@ -339,7 +353,7 @@ with gpytorch.settings.max_cg_iterations(45):
                 'gp_layer': gp_layer.state_dict(),
                 'gp_layer_optimizer': optimizer.state_dict(),
                 'opt': opt},
-                '/vulcanscratch/gauravsh/dvg/model_dump/e2e_kth_model_%d.pth' % (epoch))
+                str(model_path))
 
         if epoch % 10 == 0:
             print('log dir: %s' % opt.log_dir)
