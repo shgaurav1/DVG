@@ -62,7 +62,7 @@ class KTH(object):
             np.random.seed(index)
             #torch.manual_seed(index)
         x,y = self.get_sequence()
-        return torch.from_numpy(x), y
+        return torch.from_numpy(x)
 
     def __len__(self):
         return len(self.dirs)*36*5 # arbitrary

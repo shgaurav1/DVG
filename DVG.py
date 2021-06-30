@@ -31,8 +31,8 @@ parser.add_argument('--image_width', type=int, default=64, help='the height / wi
 parser.add_argument('--channels', default=1, type=int)
 parser.add_argument('--dataset', default='kth', help='dataset to train with')
 parser.add_argument('--n_past', type=int, default=5, help='number of frames to condition on')
-parser.add_argument('--n_future', type=int, default=10, help='number of frames to predict during training')
-parser.add_argument('--n_eval', type=int, default=30, help='number of frames to predict during eval')
+parser.add_argument('--n_future', type=int, default=7, help='number of frames to predict during training')
+parser.add_argument('--n_eval', type=int, default=12, help='number of frames to predict during eval')
 parser.add_argument('--rnn_size', type=int, default=256, help='dimensionality of hidden layer')
 parser.add_argument('--prior_rnn_layers', type=int, default=1, help='number of layers')
 parser.add_argument('--posterior_rnn_layers', type=int, default=1, help='number of layers')
@@ -82,6 +82,8 @@ test_loader = DataLoader(test_data,
 
 print(opt)
 
+dataset = opt.dataset
+
 if opt.model_path == '':
 
     # ---------------- initialize the new model -------------
@@ -101,7 +103,7 @@ else:
 
     from models.gp_models import GPRegressionLayer1
 
-    model = torch.load(opt.model_path)#kth_gp_multitask_3_252#e2e_2_kth_model_60
+    model = torch.load(opt.model_path)
     encoder = model['encoder']
     decoder = model['decoder']
     frame_predictor = model['frame_predictor']
@@ -132,13 +134,8 @@ if opt.model_path:
 optimizer = torch.optim.Adam([{'params': gp_layer.parameters()}, {'params': likelihood.parameters()},], lr=0.002)
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[3, 5], gamma=0.1)
 
-
-
-
 # Our loss for GP object. We're using the VariationalELBO, which essentially just computes the ELBO
 mll = gpytorch.mlls.VariationalELBO(likelihood, gp_layer, num_data=opt.batch_size, combine_terms=True)
-
-
 
 # --------- loss functions ------------------------------------
 mse_criterion = nn.MSELoss()#losses.TotalLoss()#
@@ -146,7 +143,6 @@ mse_latent_criterion = nn.MSELoss()
 
 mse_criterion.cuda()
 mse_latent_criterion.cuda()
-
 
 def get_training_batch():
     while True:
@@ -164,14 +160,7 @@ def get_testing_batch():
             yield batch 
 testing_batch_generator = get_testing_batch()
 
-
-
-
-
-
 # # --------- training funtions ------------------------------------
-
-
 def train(x,epoch):
     encoder.zero_grad()
     decoder.zero_grad()
@@ -232,7 +221,6 @@ def plot(x, epoch):
     nsample = 5
     gen_seq = [[] for i in range(nsample)]
     gt_seq = [x[i] for i in range(len(x))]
-    
     
     for s in range(nsample):
         frame_predictor.hidden = frame_predictor.init_hidden()
@@ -303,11 +291,11 @@ def plot(x, epoch):
                 row.append(gen_seq[s][t][i])
             gifs[t].append(row)
 
-    img_path = home_dir / f'imgs/end2end_kth_gp_ctrl_sample_{epoch}.png'
+    img_path = home_dir / f'imgs/end2end_{dataset}_gp_ctrl_sample_{epoch}.png'
     img_path.parent.mkdir(parents=True, exist_ok=True)
     utils.save_tensors_image(str(img_path), to_plot)
 
-    gif_path = home_dir / f'gifs/end2end_kth_gp_ctrl_sample_{epoch}.gif'
+    gif_path = home_dir / f'gifs/end2end_{dataset}_gp_ctrl_sample_{epoch}.gif'
     gif_path.parent.mkdir(parents=True, exist_ok=True)
     utils.save_gif(str(gif_path), gifs)
 
@@ -330,7 +318,7 @@ with gpytorch.settings.max_cg_iterations(45):
         for i in range(opt.epoch_size):
             
             progress.update(i+1)
-            x,y = next(training_batch_generator)
+            x = next(training_batch_generator)
             mse_ctrl = train(x,epoch) 
             epoch_mse += mse_ctrl 
 
@@ -345,11 +333,11 @@ with gpytorch.settings.max_cg_iterations(45):
             gp_layer.eval()
             likelihood.eval()
 
-            test_x,targets = next(testing_batch_generator)
+            test_x = next(testing_batch_generator)
             plot(test_x, epoch)
 
             # save the model
-            model_path = home_dir / f'model_dump/e2e_kth_model_{epoch}.pth'
+            model_path = home_dir / f'model_dump/e2e_{dataset}_model_{epoch}.pth'
             model_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save({
                 'encoder': encoder,

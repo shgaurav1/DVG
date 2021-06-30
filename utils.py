@@ -21,12 +21,16 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 import imageio
 
+from data.moving_mnist import MovingMNIST
+from data.bair import RobotPush
+from data.kth import KTH
+from data.ucf import UCF 
+from data.satellite import SatelliteData
 
 hostname = socket.gethostname()
 
 def load_dataset(opt):
     if opt.dataset == 'smmnist':
-        from data.moving_mnist import MovingMNIST
         train_data = MovingMNIST(
                 train=True,
                 data_root=opt.data_root,
@@ -41,8 +45,7 @@ def load_dataset(opt):
                 image_size=opt.image_width,
                 deterministic=False,
                 num_digits=opt.num_digits)
-    elif opt.dataset == 'bair':
-        from data.bair import RobotPush 
+    elif opt.dataset == 'bair': 
         train_data = RobotPush(
                 data_root=opt.data_root,
                 train=True,
@@ -54,7 +57,6 @@ def load_dataset(opt):
                 seq_len=opt.n_eval,
                 image_size=opt.image_width)
     elif opt.dataset == 'kth':
-        from data.kth import KTH 
         train_data = KTH(
                 train=True, 
                 data_root=opt.data_root,
@@ -65,8 +67,7 @@ def load_dataset(opt):
                 data_root=opt.data_root,
                 seq_len=opt.n_eval, 
                 image_size=opt.image_width)
-    elif opt.dataset == 'ucf':
-        from data.ucf import UCF 
+    elif opt.dataset == 'ucf': 
         train_data = UCF(
                 train=True, 
                 data_root=opt.data_root,
@@ -77,22 +78,30 @@ def load_dataset(opt):
                 data_root=opt.data_root,
                 seq_len=opt.n_eval, 
                 image_size=opt.image_width)
-    
+    elif opt.dataset == 'satellite':
+        train_data = SatelliteData(
+                train=True, 
+                data_root=opt.data_root,
+                seq_len=opt.n_past+opt.n_future)
+        test_data = SatelliteData(
+                train=False, 
+                data_root=opt.data_root,
+                seq_len=opt.n_eval)
+
     return train_data, test_data
 
 def sequence_input(seq, dtype):
     return [Variable(x.type(dtype)) for x in seq]
 
 def normalize_data(opt, dtype, sequence):
-    sequence, targets = sequence # , targets
-    # sequence = sequence
+    # sequence, targets = sequence # , targets
     if opt.dataset == 'smmnist' or opt.dataset == 'ucf' or opt.dataset == 'kth' or opt.dataset == 'bair' :
         sequence.transpose_(0, 1)
         sequence.transpose_(3, 4).transpose_(2, 3)
     else:
         sequence.transpose_(0, 1)
 
-    return sequence_input(sequence, dtype), targets.cuda()
+    return sequence_input(sequence, dtype)#, targets.cuda()
 
 def is_sequence(arg):
     return (not hasattr(arg, "strip") and
