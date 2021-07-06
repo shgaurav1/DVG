@@ -18,7 +18,7 @@ To train the DVG model on 64x64 KTH videos run:
 python train.py --data_root //path/to/the/data --image_width 64 --dataset kth --channels 1
 ```
 
-To generate frames using a pretrained DVG model on 64x64 KTH videos run:
+To generate frames using a [pretrained](https://drive.google.com/drive/folders/1fQICRLHJiaEYs6tJyRIWJXX1tcbwDr2j?usp=sharing) DVG model on 64x64 KTH videos run:
 ```
 python generate_frames.py --data_root //path/to/the/data --image_width 64 --dataset kth --channels 1
 ```
