@@ -25,3 +25,15 @@ python generate_frames.py --data_root //path/to/the/data --image_width 64 --data
 <p align="center">
 <img src='Results/QualitativeResults_DVG.gif' align="center" width=630 height="480">
 </p>
+
+To cite our work please use the following
+```
+@inproceedings{
+shrivastava2021diverse,
+title={Diverse Video Generation using a Gaussian Process Trigger},
+author={Gaurav Shrivastava and Abhinav Shrivastava},
+booktitle={International Conference on Learning Representations},
+year={2021},
+url={https://openreview.net/forum?id=Qm7R_SdqTpT}
+}
+```
