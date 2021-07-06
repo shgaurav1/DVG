@@ -11,7 +11,6 @@ import itertools
 import progressbar,pdb
 import numpy as np
 import gpytorch
-import losses
 from matplotlib import pyplot as plt
 from models.gp_models import GPRegressionLayer1
 
@@ -41,7 +40,6 @@ parser.add_argument('--z_dim', type=int, default=10, help='dimensionality of z_t
 parser.add_argument('--g_dim', type=int, default=90, help='dimensionality of encoder output vector and decoder input vector')
 parser.add_argument('--model', default='dcgan', help='model type (dcgan | vgg)')
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
-parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
 
 
@@ -100,7 +98,7 @@ decoder_optimizer = torch.optim.Adam(decoder.parameters(),lr = 0.002)
 
 
 # ---------------- GP initialization ----------------------
-gp_layer = GPRegressionLayer1(opt.g_dim).cuda()#inputs
+gp_layer = GPRegressionLayer1(num_dims = opt.g_dim).cuda()#inputs
 likelihood = gpytorch.likelihoods.GaussianLikelihood(batch_size=opt.g_dim).cuda()
 
 # ---------------- GP optimizer initialization ----------------------
