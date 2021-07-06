@@ -15,7 +15,7 @@ python data/convert_lua_pytorch.py
 Experimental results in the paper used 64x64.
 To train the DVG model on 64x64 KTH videos run:
 ```
-python DVG.py 
+python train.py 
 ```
 <p align="center">
 <img src='Results/QualitativeResults_DVG.gif' align="center" width=630 height="480">
