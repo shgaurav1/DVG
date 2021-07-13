@@ -13,7 +13,7 @@ class SatelliteData(object):
     
     """Data Handler that loads satellite data."""
     bands_to_remove = ["B1", "B10"]
-    bands_to_keep=["B4", "B3", "B2"]
+    bands_to_keep = ["B4", "B3", "B2"]
 
     def __init__(self, data_root, train=True, seq_len=12):
 
@@ -115,12 +115,25 @@ class SatelliteData(object):
         assert ndvi.shape == (12, 64, 64)
         
         tile = np.concatenate([tile, np.expand_dims(ndvi, axis=1)], axis=1)
-        assert tile.shape == (12, 14, 64, 64)
+        assert tile.shape == (12, 14, 64, 64), tile.shape
 
         tile = self.remove_bands(tile)
-        assert tile.shape == (12, 3, 64, 64)
+        assert tile.shape == (12, len(self.bands_to_keep), 64, 64), tile.shape
         
         return torch.from_numpy(tile)
 
+    @classmethod
+    def normalize(cls, array):
+        array_min, array_max = array.min(), array.max()
+        return (array - array_min) / (array_max - array_min)
 
-
+    @classmethod
+    def normalize_for_viewing(cls, tile: np.ndarray, no_transpose = False) -> np.ndarray:
+        blue_norm = cls.normalize(tile[cls.bands_to_keep.index("B4")])
+        green_norm = cls.normalize(tile[cls.bands_to_keep.index("B3")])
+        red_norm = cls.normalize(tile[cls.bands_to_keep.index("B2")])
+        img = np.dstack((red_norm, green_norm, blue_norm))
+        if no_transpose:
+            return img
+        else:
+            return img.transpose(2,0,1)

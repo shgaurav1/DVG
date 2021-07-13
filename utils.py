@@ -29,6 +29,8 @@ from data.satellite import SatelliteData
 
 hostname = socket.gethostname()
 
+use_satellite_normalization = True
+
 def load_dataset(opt):
     if opt.dataset == 'smmnist':
         train_data = MovingMNIST(
@@ -119,7 +121,7 @@ def image_tensor(inputs, padding=1):
     if is_sequence(inputs[0]) or (hasattr(inputs, "dim") and inputs.dim() > 4):
         images = [image_tensor(x) for x in inputs]
         if images[0].dim() == 3:
-            c_dim = images[0].size(0)
+            c_dim = 3
             x_dim = images[0].size(1)
             y_dim = images[0].size(2)
         else:
@@ -131,6 +133,8 @@ def image_tensor(inputs, padding=1):
                             x_dim * len(images) + padding * (len(images)-1),
                             y_dim)
         for i, image in enumerate(images):
+            if use_satellite_normalization:
+                image = torch.from_numpy(SatelliteData.normalize_for_viewing(image.cpu().numpy()))
             result[:, i * x_dim + i * padding :
                    (i+1) * x_dim + i * padding, :].copy_(image)
 
@@ -142,7 +146,7 @@ def image_tensor(inputs, padding=1):
                   for x in inputs]
         # print(images)
         if images[0].dim() == 3:
-            c_dim = images[0].size(0)
+            c_dim = 3
             x_dim = images[0].size(1)
             y_dim = images[0].size(2)
         else:
@@ -154,6 +158,8 @@ def image_tensor(inputs, padding=1):
                             x_dim,
                             y_dim * len(images) + padding * (len(images)-1))
         for i, image in enumerate(images):
+            if use_satellite_normalization:
+                image = torch.from_numpy(SatelliteData.normalize_for_viewing(image.cpu().numpy()))
             result[:, :, i * y_dim + i * padding :
                    (i+1) * y_dim + i * padding].copy_(image)
         return result
@@ -205,7 +211,8 @@ def save_image(filename, tensor):
 
 def save_tensors_image(filename, inputs, padding=1):
     images = image_tensor(inputs, padding)
-    return save_image(filename, images)
+    save_image(filename, images)
+    return images
 
 def prod(l):
     return functools.reduce(lambda x, y: x * y, l)
