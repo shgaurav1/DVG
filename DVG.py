@@ -184,24 +184,29 @@ def train(x,epoch):
         else:
             h = h[0]
         
-        h_pred = frame_predictor(h)
-        mse_latent += mse_latent_criterion(h_pred,h_target)
+        h_pred = frame_predictor(h)                         # Target encoding using LSTM
+        mse_latent += mse_latent_criterion(h_pred,h_target) # LSTM loss - how well LSTM predicts next encoding
 
         gp_pred = gp_layer(h.transpose(0,1).view(90,opt.batch_size,1))#likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))#
-        max_ll -= mll(gp_pred,h_target.transpose(0,1))
-        x_pred = decoder([h_pred, skip])
+        max_ll -= mll(gp_pred,h_target.transpose(0,1))      # GP Loss - how well GP predicts next encoding
+        x_pred = decoder([h_pred, skip])                    # Decoded LSTM prediction
 
-        x_target_pred = decoder([h_target, skip])
-        ae_mse += mse_latent_criterion(x_target_pred,x[i])
+        x_target_pred = decoder([h_target, skip])           # Decoded target encoding
+        ae_mse += mse_latent_criterion(x_target_pred,x[i])  # Encoder loss - how well the encoder encodes
 
-        x_pred_gp = decoder([gp_pred.mean.transpose(0,1), skip])
-        mse += mse_criterion(x_pred, x[i])
-        mse_gp += mse_latent_criterion(x_pred_gp, x[i])
+        x_pred_gp = decoder([gp_pred.mean.transpose(0,1), skip])    # Decoded GP prediction
+        mse += mse_criterion(x_pred, x[i])                          # Encoder + LSTM loss - how well the encoder+LSTM predicts the next frame
+        mse_gp += mse_latent_criterion(x_pred_gp, x[i])             # Encoder + GP loss - how well the encoder+GP predicts the next frame
         torch.cuda.empty_cache()
 
 
     loss = 1000*ae_mse + 1000*mse+ 1000*mse_latent +mse_gp + max_ll.sum()  # + kld*opt.beta
 
+    writer.add_scalar("AE MSE", ae_mse, epoch)
+    writer.add_scalar("MSE", mse, epoch)
+    writer.add_scalar("MSE LATENT", mse_latent, epoch)
+    writer.add_scalar("MSE GP", mse_gp, epoch)
+    writer.add_scalar("Max ll", max_ll.sum(), epoch)
     writer.add_scalar("Loss/train", loss, epoch)
 
     loss.backward()
@@ -219,9 +224,10 @@ def train(x,epoch):
 # --------- plotting funtions ------------------------------------
 def plot(x, epoch):
     nsample = 5
-    gen_seq = [[] for i in range(nsample)]
+    gen_seq = [[] for _ in range(nsample)]
     gt_seq = [x[i] for i in range(len(x))]
     
+    # Fills in gen_seq with n_samples 
     for s in range(nsample):
         frame_predictor.hidden = frame_predictor.init_hidden()
         gen_seq[s].append(x[0])
@@ -253,16 +259,14 @@ def plot(x, epoch):
 
     # -------------- creating the GIFs ---------------------------
     to_plot = []
-    gifs = [ [] for t in range(opt.n_eval) ]
+    gifs = [ [] for _ in range(opt.n_eval) ]
     nrow = min(opt.batch_size, 10)
     for i in range(nrow):
         # ground truth sequence
-        row = [] 
-        for t in range(opt.n_eval):
-            row.append(gt_seq[t][i])
+        row = [gt_seq[t][i] for t in range(opt.n_eval)] 
         to_plot.append(row)
 
-        # best sequence
+        # Finds best sequence (lowest loss)
         min_mse = 1e7
         for s in range(nsample):
             mse = 0
@@ -277,23 +281,22 @@ def plot(x, epoch):
                   np.random.randint(nsample), 
                   np.random.randint(nsample), 
                   np.random.randint(nsample)]
-        for ss in range(len(s_list)):
-            s = s_list[ss]
-            row = []
-            for t in range(opt.n_eval):
-                row.append(gen_seq[s][t][i]) 
+        
+        # Add to images
+        for s in s_list:
+            row = [gen_seq[s][t][i] for t in range(opt.n_eval)]
             to_plot.append(row)
+        
+        # Add to gifs
         for t in range(opt.n_eval):
-            row = []
-            row.append(gt_seq[t][i])
-            for ss in range(len(s_list)):
-                s = s_list[ss]
-                row.append(gen_seq[s][t][i])
+            row = [gt_seq[t][i]]
+            row += [gen_seq[s][t][i] for s in s_list]
             gifs[t].append(row)
 
     img_path = home_dir / f'imgs/end2end_{dataset}_gp_ctrl_sample_{epoch}.png'
     img_path.parent.mkdir(parents=True, exist_ok=True)
-    utils.save_tensors_image(str(img_path), to_plot)
+    tensor_of_images = utils.save_tensors_image(str(img_path), to_plot)
+    writer.add_image(tensor_of_images)
 
     gif_path = home_dir / f'gifs/end2end_{dataset}_gp_ctrl_sample_{epoch}.gif'
     gif_path.parent.mkdir(parents=True, exist_ok=True)
