@@ -54,8 +54,9 @@ def load_tif(local_path: Path, days_per_timestep: int = 30) -> xr.DataArray:
 def tif_to_tiles(tif: xr.DataArray, tile_size: int = 64) -> xr.DataArray:
     tif_x_len = tif.shape[-2]
     tif_y_len = tif.shape[-1]
-    assert tif_x_len > tile_size
-    assert tif_y_len > tile_size
+
+    if tif_x_len < tile_size or tif_y_len < tile_size: # Check that tif is larger than tile
+        return []
 
     x_ranges = [(x-tile_size, x) for x in range(tile_size, tif_x_len, tile_size)]
     y_ranges = [(y-tile_size, y) for y in range(tile_size, tif_y_len, tile_size)]
@@ -136,6 +137,6 @@ def main(tif_dir: str, processed_dir: str, tile_size: int = 64):
     
 
 if __name__ == "__main__":
-    tif_dir = "/cmlscratch/izvonkov/forecaster-data"
-    processed_dir = "/cmlscratch/izvonkov/forecaster-data-processed-split"
+    tif_dir = "/cmlscratch/izvonkov/Arizona"
+    processed_dir = "/cmlscratch/izvonkov/Arizona-processed"
     main(tif_dir, processed_dir)
