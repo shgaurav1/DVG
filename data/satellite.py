@@ -6,16 +6,24 @@ import warnings
 import xarray as xr
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from .convert_satellite import BANDS
+
+
+RGB_BANDS = ["B4", "B3", "B2"]
+ALL_BANDS = BANDS
+BANDS_WITH_NO_AIR = [b for b in BANDS if b not in ["B1", "B10"]]
 
 class SatelliteData(object):
     
     """Data Handler that loads satellite data."""
-    bands_to_remove = ["B1", "B10"]
-    bands_to_keep = ["B4", "B3", "B2"]
+    bands_to_keep = BANDS_WITH_NO_AIR
 
-    def __init__(self, data_root, train=True, seq_len=12):
+    def __init__(self, data_root, train=True, seq_len=12, skip_normalize=False, no_randomization=False):
+
+        self.seq_len = seq_len
+        self.skip_normalize = skip_normalize
+        self.no_randomization = no_randomization
 
         with (Path(data_root) / "normalizing_dict.json").open() as f:
             normalizing_dict = json.load(f)
@@ -71,7 +79,7 @@ class SatelliteData(object):
         return np.nan_to_num(array, nan=nan)
 
     def _normalize(self, array: np.ndarray) -> np.ndarray:
-        return (array - self.mean / self.std)
+        return ((array - self.mean) / self.std)
           
     def __len__(self):
         return len(self.nc_files)
@@ -95,30 +103,31 @@ class SatelliteData(object):
         """
         Expects the input to be of shape [timesteps, bands, size, size]
         """
-        if len(cls.bands_to_keep) > 0:
-            indices_to_keep = [BANDS.index(band) for band in cls.bands_to_keep]  
-        else:
-            indices_to_remove = [BANDS.index(band) for band in cls.bands_to_remove]
-            indices_to_keep = [i for i in range(x.shape[1]) if i not in indices_to_remove]
+        indices_to_keep = [BANDS.index(band) for band in cls.bands_to_keep]  
         return x[:, indices_to_keep]
 
 
     def __getitem__(self, index):
-        self.set_seed(index)
-        rand_i = np.random.randint(len(self.nc_files))
-        tile = xr.open_dataarray(self.nc_files[rand_i]).values
-        assert tile.shape == (12, 13, 64, 64)
+        if not self.no_randomization:
+            self.set_seed(index)
+            rand_i = np.random.randint(len(self.nc_files))
+            file = self.nc_files[rand_i]
+        else:
+            file = self.nc_files[index]
+        tile = xr.open_dataarray(file).values
+        assert tile.shape == (self.seq_len, 14, 64, 64)
+        
+        #ndvi = self._calculate_ndvi(tile)
+        #assert ndvi.shape == (self.seq_len, 64, 64)
 
-        tile = self._normalize(tile)
-        
-        ndvi = self._calculate_ndvi(tile)
-        assert ndvi.shape == (12, 64, 64)
-        
-        tile = np.concatenate([tile, np.expand_dims(ndvi, axis=1)], axis=1)
-        assert tile.shape == (12, 14, 64, 64), tile.shape
+        if not self.skip_normalize:
+            tile = self._normalize(tile)
 
         tile = self.remove_bands(tile)
-        assert tile.shape == (12, len(self.bands_to_keep), 64, 64), tile.shape
+        assert tile.shape == (self.seq_len, len(self.bands_to_keep), 64, 64), tile.shape
+
+        #tile = np.concatenate([tile, np.expand_dims(ndvi, axis=1)], axis=1)
+        #assert tile.shape == (self.seq_len, len(self.bands_to_keep)+1, 64, 64), tile.shape
         
         return torch.from_numpy(tile)
 
