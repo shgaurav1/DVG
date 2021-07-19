@@ -7,9 +7,11 @@ import json
 import numpy as np
 import pandas as pd
 import re
+import warnings
 import xarray as xr
 
 BANDS = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12"]
+BANDS_WITH_NDVI = BANDS + ["NDVI"]
 
 def get_start_date(path: Path):
     dates = re.findall(r"\d{4}-\d{2}-\d{2}", path.stem)
@@ -70,6 +72,26 @@ def tile_name(tile: xr.DataArray):
     return f"{date}_{x}_{y}.nc"
 
 
+def calculate_ndvi(input_array: np.ndarray) -> np.ndarray:
+    r"""
+    Given an input array of shape [timestep, bands] or [batches, timesteps, bands]
+    where bands == len(BANDS), returns an array of shape
+    [timestep, bands + 1] where the extra band is NDVI,
+    (b08 - b04) / (b08 + b04)
+    """
+    b08 = input_array[:, BANDS.index("B8")]
+    b04 = input_array[:, BANDS.index("B4")]
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="invalid value encountered in true_divide")
+        # suppress the following warning
+        # RuntimeWarning: invalid value encountered in true_divide
+        # for cases where near_infrared + red == 0
+        # since this is handled in the where condition
+        ndvi = np.where((b08 + b04) > 0, (b08 - b04) / (b08 + b04), 0,)
+    return ndvi
+
+
 def update_normalizing_values(norm_dict: Dict[str, Union[np.ndarray, int]], array: np.ndarray) -> Dict[str, Union[np.ndarray, int]]:
     # given an input array of shape [timesteps, bands]
     # update the normalizing dict
@@ -121,6 +143,12 @@ def main(tif_dir: str, processed_dir: str, tile_size: int = 64):
             tif = load_tif(p)
             tiles = tif_to_tiles(tif, tile_size)
             for tile in tiles:
+                ndvi = calculate_ndvi(tile.values)
+                ndvi = np.expand_dims(ndvi, axis=1)
+                ndvi = xr.DataArray(ndvi, name="NDVI", dims=('time', 'band', 'y', 'x'))
+
+                tile = xr.concat([tile, ndvi], dim='band')
+
                 if subset == "train":
                     normalizing_dict = update_normalizing_values(normalizing_dict, tile.values)
                 save_path = processed_dir_path / subset / tile_name(tile)
@@ -133,10 +161,8 @@ def main(tif_dir: str, processed_dir: str, tile_size: int = 64):
     with (processed_dir_path / "normalizing_dict.json").open("w") as fp:
         json.dump(json_friendly_dict, fp)
     
-    
-    
 
 if __name__ == "__main__":
     tif_dir = "/cmlscratch/izvonkov/Arizona"
-    processed_dir = "/cmlscratch/izvonkov/Arizona-processed"
+    processed_dir = "/cmlscratch/izvonkov/Arizona-processed2"
     main(tif_dir, processed_dir)
