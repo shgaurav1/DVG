@@ -7,12 +7,12 @@ import xarray as xr
 
 from pathlib import Path
 from typing import Optional
-from .convert_satellite import BANDS
+from .convert_satellite import BANDS_WITH_NDVI
 
 
 RGB_BANDS = ["B4", "B3", "B2"]
-ALL_BANDS = BANDS
-BANDS_WITH_NO_AIR = [b for b in BANDS if b not in ["B1", "B10"]]
+ALL_BANDS = BANDS_WITH_NDVI
+BANDS_WITH_NO_AIR = [b for b in BANDS_WITH_NDVI if b not in ["B1", "B10"]]
 
 class SatelliteData(object):
     
@@ -103,7 +103,7 @@ class SatelliteData(object):
         """
         Expects the input to be of shape [timesteps, bands, size, size]
         """
-        indices_to_keep = [BANDS.index(band) for band in cls.bands_to_keep]  
+        indices_to_keep = [BANDS_WITH_NDVI.index(band) for band in cls.bands_to_keep]  
         return x[:, indices_to_keep]
 
 
