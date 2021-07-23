@@ -86,9 +86,9 @@ def load_dataset(opt):
 def sequence_input(seq, dtype):
     return [Variable(x.type(dtype)) for x in seq]
 
-def normalize_data(opt, dtype, sequence):
+def normalize_data(dataset: str, dtype, sequence):
     # sequence, targets = sequence # , targets
-    if opt.dataset == 'smmnist' or opt.dataset == 'ucf' or opt.dataset == 'kth' or opt.dataset == 'bair' :
+    if dataset == 'smmnist' or dataset == 'ucf' or dataset == 'kth' or dataset == 'bair' :
         sequence.transpose_(0, 1)
         sequence.transpose_(3, 4).transpose_(2, 3)
     else:

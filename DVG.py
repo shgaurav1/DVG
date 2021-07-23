@@ -147,7 +147,7 @@ mse_latent_criterion.cuda()
 def get_training_batch():
     while True:
         for sequence in train_loader:
-            batch = utils.normalize_data(opt, dtype, sequence)
+            batch = utils.normalize_data(opt.dataset, dtype, sequence)
             yield batch
 training_batch_generator = get_training_batch()
 
@@ -156,7 +156,7 @@ training_batch_generator = get_training_batch()
 def get_testing_batch():
     while True:
         for sequence in test_loader:
-            batch = utils.normalize_data(opt, dtype, sequence)
+            batch = utils.normalize_data(opt.dataset, dtype, sequence)
             yield batch 
 testing_batch_generator = get_testing_batch()
 
@@ -296,7 +296,7 @@ def plot(x, epoch):
     img_path = home_dir / f'imgs/end2end_{dataset}_gp_ctrl_sample_{epoch}.png'
     img_path.parent.mkdir(parents=True, exist_ok=True)
     tensor_of_images = utils.save_tensors_image(str(img_path), to_plot)
-    writer.add_image(tensor_of_images)
+    writer.add_image(tag=f"image_{dataset}_{epoch}", img_tensor=tensor_of_images)
 
     gif_path = home_dir / f'gifs/end2end_{dataset}_gp_ctrl_sample_{epoch}.gif'
     gif_path.parent.mkdir(parents=True, exist_ok=True)
