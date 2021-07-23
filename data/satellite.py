@@ -17,7 +17,7 @@ BANDS_WITH_NO_AIR = [b for b in BANDS_WITH_NDVI if b not in ["B1", "B10"]]
 class SatelliteData(object):
     
     """Data Handler that loads satellite data."""
-    bands_to_keep = BANDS_WITH_NO_AIR
+    bands_to_keep = RGB_BANDS #BANDS_WITH_NO_AIR
 
     def __init__(self, data_root, train=True, seq_len=12, skip_normalize=False, no_randomization=False):
 
@@ -48,25 +48,6 @@ class SatelliteData(object):
             self.seed_is_set = True
             np.random.seed(seed)
 
-    @staticmethod
-    def _calculate_ndvi(input_array: np.ndarray) -> np.ndarray:
-        r"""
-        Given an input array of shape [timestep, bands] or [batches, timesteps, bands]
-        where bands == len(BANDS), returns an array of shape
-        [timestep, bands + 1] where the extra band is NDVI,
-        (b08 - b04) / (b08 + b04)
-        """
-        b08 = input_array[:, BANDS.index("B8")]
-        b04 = input_array[:, BANDS.index("B4")]
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="invalid value encountered in true_divide")
-            # suppress the following warning
-            # RuntimeWarning: invalid value encountered in true_divide
-            # for cases where near_infrared + red == 0
-            # since this is handled in the where condition
-            ndvi = np.where((b08 + b04) > 0, (b08 - b04) / (b08 + b04), 0,)
-        return ndvi
 
     @staticmethod
     def _maxed_nan_to_num(
@@ -116,18 +97,12 @@ class SatelliteData(object):
             file = self.nc_files[index]
         tile = xr.open_dataarray(file).values
         assert tile.shape == (self.seq_len, 14, 64, 64)
-        
-        #ndvi = self._calculate_ndvi(tile)
-        #assert ndvi.shape == (self.seq_len, 64, 64)
 
         if not self.skip_normalize:
             tile = self._normalize(tile)
 
         tile = self.remove_bands(tile)
         assert tile.shape == (self.seq_len, len(self.bands_to_keep), 64, 64), tile.shape
-
-        #tile = np.concatenate([tile, np.expand_dims(ndvi, axis=1)], axis=1)
-        #assert tile.shape == (self.seq_len, len(self.bands_to_keep)+1, 64, 64), tile.shape
         
         return torch.from_numpy(tile)
 
