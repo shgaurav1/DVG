@@ -6,3 +6,4 @@ gifs
 imgs
 model_dump
 runs
+.env
