@@ -103,7 +103,10 @@ class SatelliteData(object):
         else:
             file = self.nc_files[index]
         tile = xr.open_dataarray(file).values
-        assert tile.shape == (self.seq_len, len(BANDS_WITH_NDVI), 64, 64)
+        assert tile.shape == (60, len(BANDS_WITH_NDVI), 64, 64)
+
+        tile = tile[0:self.seq_len]
+        assert tile.shape == (self.seq_len, len(BANDS_WITH_NDVI), 64, 64), tile.shape
 
         tile = self.remove_bands(tile)
         assert tile.shape == (self.seq_len, len(self.bands_to_keep), 64, 64), tile.shape
