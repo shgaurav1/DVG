@@ -388,7 +388,7 @@ if opt.test:
 
 # --------- training loop ------------------------------------
 else:
-    writer = SummaryWriter(log_dir="runs/{dataset}/{opt.run_name}" if opt.run_name else None)
+    writer = SummaryWriter(log_dir=f"runs/{dataset}/{opt.run_name}" if opt.run_name else None)
     with gpytorch.settings.max_cg_iterations(45):
         for epoch in range(opt.niter):
             gp_layer.train()
