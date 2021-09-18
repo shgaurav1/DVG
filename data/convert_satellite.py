@@ -13,6 +13,8 @@ import xarray as xr
 BANDS = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12"]
 BANDS_WITH_NDVI = BANDS + ["NDVI"]
 
+DIVIDING_X = -114.54
+
 def get_start_date(path: Path):
     dates = re.findall(r"\d{4}-\d{2}-\d{2}", path.stem)
     if len(dates) != 2:
@@ -130,31 +132,38 @@ def main(tif_dir: str, processed_dir: str, tile_size: int = 64):
     print(f"Loading {len(all_tif_paths)} tifs")
     split = int(len(all_tif_paths)*0.7)
 
-    train_test_tifs = {
-        "train": all_tif_paths[:split],
-        "test": all_tif_paths[split:]
-    }
-
     normalizing_dict = {"n": 0}
 
-    for subset, tif_paths in train_test_tifs.items():
+    for subset in ["train", "test"]:
         (processed_dir_path / subset).mkdir(exist_ok=True, parents=True)
-        for p in tqdm(tif_paths):
-            tif = load_tif(p)
-            tiles = tif_to_tiles(tif, tile_size)
-            for tile in tiles:
-                ndvi = calculate_ndvi(tile.values)
-                ndvi = np.expand_dims(ndvi, axis=1)
-                ndvi = xr.DataArray(ndvi, name="NDVI", dims=('time', 'band', 'y', 'x'))
 
-                tile = xr.concat([tile, ndvi], dim='band')
+    for p in tqdm(all_tif_paths):
+        tif = load_tif(p)
+        tif_ndvi = calculate_ndvi(tif).mean()
 
-                if subset == "train":
-                    normalizing_dict = update_normalizing_values(normalizing_dict, tile.values)
-                save_path = processed_dir_path / subset / tile_name(tile)
-                if save_path.exists():
-                    continue
-                tile.to_netcdf(str(save_path))
+        # Filter out all tifs with low NDVI
+        if tif_ndvi < 0.1:
+            continue
+        tiles = tif_to_tiles(tif, tile_size)
+        for tile in tiles:
+            ndvi = calculate_ndvi(tile.values)
+            ndvi = np.expand_dims(ndvi, axis=1)
+            ndvi = xr.DataArray(ndvi, name="NDVI", dims=('time', 'band', 'y', 'x'))
+
+            tile = xr.concat([tile, ndvi], dim='band')
+
+            # Determine subset
+            x = float(tile.x[0].values)
+            if x > DIVIDING_X:
+                subset = "test"
+            else:
+                subset = "train"
+                normalizing_dict = update_normalizing_values(normalizing_dict, tile.values)
+
+            save_path = processed_dir_path / subset / tile_name(tile)
+            if save_path.exists():
+                continue
+            tile.to_netcdf(str(save_path))
 
     json_friendly_dict = calculate_normalizing_dict(normalizing_dict)
     print(json_friendly_dict)
@@ -164,5 +173,5 @@ def main(tif_dir: str, processed_dir: str, tile_size: int = 64):
 
 if __name__ == "__main__":
     tif_dir = "/cmlscratch/izvonkov/Arizona"
-    processed_dir = "/cmlscratch/izvonkov/Arizona-processed2"
+    processed_dir = "/cmlscratch/izvonkov/Arizona-processed4"
     main(tif_dir, processed_dir)
