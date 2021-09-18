@@ -22,7 +22,7 @@ hostname = socket.gethostname()
 
 use_satellite_normalization = True
 
-def load_dataset(opt):
+def load_dataset(opt, bands_to_keep):
     if opt.dataset == 'smmnist':
         train_data = MovingMNIST(
                 train=True,
@@ -75,10 +75,12 @@ def load_dataset(opt):
         train_data = SatelliteData(
                 train=True, 
                 data_root=opt.data_root,
+                bands_to_keep=bands_to_keep,
                 seq_len=opt.n_past+opt.n_future)
         test_data = SatelliteData(
                 train=False, 
                 data_root=opt.data_root,
+                bands_to_keep=bands_to_keep,
                 seq_len=opt.n_eval)
 
     return train_data, test_data
@@ -124,8 +126,6 @@ def image_tensor(inputs, padding=1):
                             x_dim * len(images) + padding * (len(images)-1),
                             y_dim)
         for i, image in enumerate(images):
-            if use_satellite_normalization:
-                image = torch.from_numpy(SatelliteData.normalize_for_viewing(image.cpu().numpy()))
             result[:, i * x_dim + i * padding :
                    (i+1) * x_dim + i * padding, :].copy_(image)
 
@@ -149,8 +149,6 @@ def image_tensor(inputs, padding=1):
                             x_dim,
                             y_dim * len(images) + padding * (len(images)-1))
         for i, image in enumerate(images):
-            if use_satellite_normalization:
-                image = torch.from_numpy(SatelliteData.normalize_for_viewing(image.cpu().numpy()))
             result[:, :, i * y_dim + i * padding :
                    (i+1) * y_dim + i * padding].copy_(image)
         return result
