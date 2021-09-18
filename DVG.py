@@ -1,4 +1,6 @@
 import warnings
+
+from data.satellite import RGB_BANDS
 warnings.simplefilter("ignore", UserWarning)
 
 import torch
@@ -11,7 +13,9 @@ import progressbar, pdb
 import numpy as np
 import gpytorch
 from models.gp_models import GPRegressionLayer1
+from typing import List
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 from pathlib import Path
 
 
@@ -46,7 +50,8 @@ parser.add_argument('--num_digits', type=int, default=2, help='number of digits 
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
 parser.add_argument('--model_path', type=str, default='', help='model pth file with which to resume training')
 parser.add_argument('--home_dir', type=str, default='.', help='Where to save gifs, models, etc')
-
+parser.add_argument('--test', type=bool, default=False, help="whether to train or test the model")
+parser.add_argument('--run_name', type=str, default='', help='name of run')
 
 opt = parser.parse_args()
 print("Random Seed: ", opt.seed)
@@ -57,13 +62,11 @@ print('Using device:', device)
 
 home_dir = Path(opt.home_dir)
 
-writer = SummaryWriter()
-
 torch.cuda.manual_seed_all(opt.seed)
 dtype = torch.cuda.FloatTensor
 
 # --------- load a dataset ------------------------------------
-train_data, test_data = utils.load_dataset(opt)
+train_data, test_data = utils.load_dataset(opt, bands_to_keep=RGB_BANDS)
 
 train_loader = DataLoader(train_data,
                           num_workers=opt.data_threads,
@@ -85,6 +88,8 @@ print(opt)
 dataset = opt.dataset
 
 if opt.model_path == '':
+    if opt.test:
+        raise ValueError('Must specify model path if testing')
 
     # ---------------- initialize the new model -------------
 
@@ -161,7 +166,7 @@ def get_testing_batch():
 testing_batch_generator = get_testing_batch()
 
 # # --------- training funtions ------------------------------------
-def train(x,epoch):
+def train(x,epoch, tb_writer):
     encoder.zero_grad()
     decoder.zero_grad()
     frame_predictor.zero_grad()
@@ -200,14 +205,17 @@ def train(x,epoch):
         torch.cuda.empty_cache()
 
 
-    loss = 1000*ae_mse + 1000*mse+ 1000*mse_latent +mse_gp + max_ll.sum()  # + kld*opt.beta
+    encoder_weight = 100
+    alpha = 1
+    beta = 0.1
+    loss = encoder_weight*ae_mse + alpha*mse+ alpha*mse_latent + beta*mse_gp + beta*max_ll.sum()  # + kld*opt.beta
 
-    writer.add_scalar("AE MSE", ae_mse, epoch)
-    writer.add_scalar("MSE", mse, epoch)
-    writer.add_scalar("MSE LATENT", mse_latent, epoch)
-    writer.add_scalar("MSE GP", mse_gp, epoch)
-    writer.add_scalar("Max ll", max_ll.sum(), epoch)
-    writer.add_scalar("Loss/train", loss, epoch)
+    tb_writer.add_scalar("Loss/Encoder - AE MSE", ae_mse, epoch)
+    tb_writer.add_scalar("Loss/Encoder and LSTM - MSE", mse, epoch)
+    tb_writer.add_scalar("Loss/LSTM - MSE LATENT", mse_latent, epoch)
+    tb_writer.add_scalar("Loss/Encoder and GP loss - MSE GP", mse_gp, epoch)
+    tb_writer.add_scalar("Loss/GP loss - Max ll", max_ll.sum(), epoch)
+    tb_writer.add_scalar("Loss/Total", loss, epoch)
 
     loss.backward()
 
@@ -216,46 +224,47 @@ def train(x,epoch):
     decoder_optimizer.step()
     optimizer.step()
 
-
     return mse_latent.data.cpu().numpy()/(opt.n_past+opt.n_future)
 
+# --------- predicting functions ------------------------------------
+def predict(x, index_to_use_gp_layer: int = opt.n_past) -> List[torch.Tensor]:
+    frame_predictor.hidden = frame_predictor.init_hidden() # Initialize LSTM hidden state
+    gen_seq = [x[0]]
+    for i in range(1, opt.n_eval):
 
+        # Encode the input time step
+        h = encoder(gen_seq[-1])   
+        if opt.last_frame_skip or i < opt.n_past:   
+            h, skip = h     # Extract encoding and skip-connection?
+        else:
+            h, _ = h        # Extract encoding only
+        h = h.detach()
+
+        # Predict the next time step using the LSTM (needs to be called each time to update the hidden state)
+        h_pred = frame_predictor(h).detach()
+        
+        # Use the GP layer to predict the next time step
+        # Previously i%10 was used for longer sequences
+        if i == index_to_use_gp_layer: 
+            h_pred_from_gp_layer = likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))
+            h_pred = h_pred_from_gp_layer.rsample().transpose(0,1)
+        
+
+        # Add timestep to generated sequence
+        if i < opt.n_past:
+            gen_seq.append(x[i])
+        else:
+            decoded_h_pred = decoder([h_pred,skip]).detach()
+            gen_seq.append(decoded_h_pred )
+
+    return gen_seq
 
 # --------- plotting funtions ------------------------------------
 def plot(x, epoch):
     nsample = 5
-    gen_seq = [[] for _ in range(nsample)]
     gt_seq = [x[i] for i in range(len(x))]
-    
-    # Fills in gen_seq with n_samples 
-    for s in range(nsample):
-        frame_predictor.hidden = frame_predictor.init_hidden()
-        gen_seq[s].append(x[0])
-        x_in = x[0]
-        for i in range(1, opt.n_eval):
-            h = encoder(x_in)
-            if opt.last_frame_skip or i < opt.n_past:   
-                h, skip = h
-            else:
-                h, _ = h
-            h = h.detach()
-            if i < opt.n_past:
-                h_target = encoder(x[i])
-                h_target = h_target[0].detach()
-                frame_predictor(h)
-                x_in = x[i]
-                gen_seq[s].append(x_in)
-            else:
-                h_pred = frame_predictor(h).detach()
-                if i == 10:
-                    print(str(s) + " started")
-                    final_hpred = likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))
-                    x_in = decoder([final_hpred.rsample().transpose(0,1), skip]).detach()
-                    gen_seq[s].append(x_in)
-                    print(str(s) + " completed")
-                else:
-                    x_in = decoder([h_pred,skip]).detach()
-                    gen_seq[s].append(x_in)
+    gen_seq = [predict(x) for _ in range(nsample)]
+
 
     # -------------- creating the GIFs ---------------------------
     to_plot = []
@@ -292,66 +301,145 @@ def plot(x, epoch):
             row = [gt_seq[t][i]]
             row += [gen_seq[s][t][i] for s in s_list]
             gifs[t].append(row)
+    
+    if opt.dataset == 'satellite':
+        for i, row in enumerate(to_plot):
+            for j, img in enumerate(row):
+                img_np = img.cpu().numpy()
+                img_viewable = train_data.for_viewing(img_np)
+                img_tensor = torch.from_numpy(img_viewable)
+                to_plot[i][j] = img_tensor
+        
+        for i, gif in enumerate(gifs):
+            for j, row in enumerate(gif):
+                for k, img in enumerate(row):
+                    img_np = img.cpu().numpy()
+                    img_viewable = train_data.for_viewing(img_np)
+                    img_tensor = torch.from_numpy(img_viewable)
+                    gifs[i][j][k] = img_tensor
 
-    img_path = home_dir / f'imgs/end2end_{dataset}_gp_ctrl_sample_{epoch}.png'
+
+    if opt.run_name:
+        file_name = opt.run_name
+    else:
+        file_name = f"end2end_gp_ctrl_sample_{epoch}"
+
+    img_path = home_dir / f'imgs/{dataset}/{file_name}.png'
     img_path.parent.mkdir(parents=True, exist_ok=True)
     tensor_of_images = utils.save_tensors_image(str(img_path), to_plot)
-    writer.add_image(tag=f"image_{dataset}_{epoch}", img_tensor=tensor_of_images)
+    print(f"Saving image to: {img_path}")
 
-    gif_path = home_dir / f'gifs/end2end_{dataset}_gp_ctrl_sample_{epoch}.gif'
+    gif_path = home_dir / f'gifs/{dataset}/{file_name}.gif'
     gif_path.parent.mkdir(parents=True, exist_ok=True)
     utils.save_gif(str(gif_path), gifs)
+    print(f"Saving images as gif: {gif_path}")
+    
 
+# --------- testing loop ------------------------------------
+def compute_mse(Y_pred: List[np.ndarray], Y_true: List[np.ndarray]) -> np.ndarray:
+    return ((np.array(Y_true) - np.array(Y_pred))**2).mean(axis=(0,-2,-1))
+
+if opt.test:
+    frame_predictor.eval()
+    gp_layer.eval()
+    likelihood.eval()
+
+    # Go through all test data
+    normalized_mse_list = []
+    unnormalized_mse_list = []
+    for sequence in tqdm(test_loader):
+        x = utils.normalize_data(opt.dataset, dtype, sequence)
+        nsample = 5
+        gen_seq = [predict(x) for _ in range(nsample)]
+        gt_seq = [x[i] for i in range(len(x))]
+        
+        for i in tqdm(range(opt.batch_size), leave=False):
+            # Finds best sequence (lowest loss)
+            min_mse = None
+            for s in range(nsample):
+                Y_pred = []
+                Y_true = []
+                Y_pred_unnormed = []
+                Y_true_unnormed = []
+
+                for t in range(opt.n_past, opt.n_eval):
+                    y_pred_timestep = gen_seq[s][t][i].data.cpu().numpy()
+                    y_true_timestep = gt_seq[t][i].data.cpu().numpy()
+
+                    Y_pred.append(y_pred_timestep)
+                    Y_true.append(y_true_timestep)
+                    Y_pred_unnormed.append(train_data.unnormalize(y_pred_timestep))
+                    Y_true_unnormed.append(train_data.unnormalize(y_true_timestep))
+
+                mse_per_band = compute_mse(Y_true, Y_pred)
+                
+                if min_mse is None or  min_mse > mse_per_band.sum():
+                    min_mse = mse_per_band.sum()
+                    lowest_normed_mse_pixel = mse_per_band
+                    lowest_unnormed_mse_pixel =  compute_mse(Y_true_unnormed, Y_pred_unnormed)
+            
+            normalized_mse_list.append(lowest_normed_mse_pixel)
+            unnormalized_mse_list.append(lowest_unnormed_mse_pixel)
+    mean_mse_per_bands = np.array(normalized_mse_list).mean(axis=0)
+    mean_unnormalized_mse_per_bands = np.array(unnormalized_mse_list).mean(axis=0)
+    print(f"Normalized_mse {mean_mse_per_bands}")
+    print(f"Unnormalized_mse {mean_unnormalized_mse_per_bands}")
 
 
 # --------- training loop ------------------------------------
-with gpytorch.settings.max_cg_iterations(45):
-    for epoch in range(opt.niter):
-        gp_layer.train()
-        likelihood.train()
-        frame_predictor.train()
-        encoder.train()
-        decoder.train()
-        scheduler.step()
+else:
+    writer = SummaryWriter(log_dir="runs/{dataset}/{opt.run_name}" if opt.run_name else None)
+    with gpytorch.settings.max_cg_iterations(45):
+        for epoch in range(opt.niter):
+            gp_layer.train()
+            likelihood.train()
+            frame_predictor.train()
+            encoder.train()
+            decoder.train()
+            scheduler.step()
 
-        epoch_mse = 0
-        epoch_ls = 0
-        progress = progressbar.ProgressBar(opt.epoch_size).start()
-        
-        for i in range(opt.epoch_size):
+            epoch_mse = 0
+            epoch_ls = 0
+            progress = progressbar.ProgressBar(opt.epoch_size).start()
             
-            progress.update(i+1)
-            x = next(training_batch_generator)
-            mse_ctrl = train(x,epoch) 
-            epoch_mse += mse_ctrl 
+            for i in range(opt.epoch_size):
+                
+                progress.update(i+1)
+                x = next(training_batch_generator)
+                mse_ctrl = train(x, epoch, writer) 
+                epoch_mse += mse_ctrl 
 
-        progress.finish()
-        utils.clear_progressbar()
+            progress.finish()
+            utils.clear_progressbar()
 
-        print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, epoch_mse/opt.epoch_size, epoch*opt.epoch_size*opt.batch_size, mse_ctrl))
-        if epoch % 4 == 0:
-        
-            # plot some stuff
-            frame_predictor.eval()
-            gp_layer.eval()
-            likelihood.eval()
+            print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, epoch_mse/opt.epoch_size, epoch*opt.epoch_size*opt.batch_size, mse_ctrl))
+            if epoch % 4 == 0:
+            
+                # plot some stuff
+                frame_predictor.eval()
+                gp_layer.eval()
+                likelihood.eval()
 
-            test_x = next(testing_batch_generator)
-            plot(test_x, epoch)
+                test_x = next(testing_batch_generator)
+                plot(test_x, epoch)
 
-            # save the model
-            model_path = home_dir / f'model_dump/e2e_{dataset}_model_{epoch}.pth'
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save({
-                'encoder': encoder,
-                'decoder': decoder,
-                'frame_predictor': frame_predictor,
-                'likelihood': likelihood.state_dict(),
-                'gp_layer': gp_layer.state_dict(),
-                'gp_layer_optimizer': optimizer.state_dict(),
-                'opt': opt},
-                str(model_path))
+                # save the model
+                if opt.run_name:
+                    model_name = opt.run_name
+                else:
+                    model_name = f'e2e_{dataset}_model'
+                model_path = home_dir / f'model_dump/{model_name}.pth'
+                model_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save({
+                    'encoder': encoder,
+                    'decoder': decoder,
+                    'frame_predictor': frame_predictor,
+                    'likelihood': likelihood.state_dict(),
+                    'gp_layer': gp_layer.state_dict(),
+                    'gp_layer_optimizer': optimizer.state_dict(),
+                    'opt': opt},
+                    str(model_path))
 
-        if epoch % 10 == 0:
-            print('log dir: %s' % opt.log_dir)
-    writer.flush()
+            if epoch % 10 == 0:
+                print('log dir: %s' % opt.log_dir)
+        writer.flush()
