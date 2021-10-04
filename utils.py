@@ -7,6 +7,7 @@ import functools
 from skimage.measure import compare_psnr as psnr_metric
 from skimage.measure import compare_ssim as ssim_metric
 from scipy import signal
+from typing import List
 from PIL import Image, ImageDraw
 
 from torch.autograd import Variable
@@ -16,11 +17,11 @@ from data.moving_mnist import MovingMNIST
 from data.bair import RobotPush
 from data.kth import KTH
 from data.ucf import UCF 
-from data.satellite import SatelliteData
+from data.satellite import SatelliteData, Normalization
 
 hostname = socket.gethostname()
 
-def load_dataset(opt, bands_to_keep):
+def load_dataset(opt, bands_to_keep: List = [], normalization: Normalization = Normalization.SKIP):
     if opt.dataset == 'smmnist':
         train_data = MovingMNIST(
                 train=True,
@@ -75,13 +76,13 @@ def load_dataset(opt, bands_to_keep):
                 data_root=opt.data_root,
                 bands_to_keep=bands_to_keep,
                 seq_len=opt.n_past+opt.n_future,
-                )
+                normalization=normalization)
         test_data = SatelliteData(
                 train=False, 
                 data_root=opt.data_root,
                 bands_to_keep=bands_to_keep,
                 seq_len=opt.n_eval,
-                )
+                normalization=normalization)
 
     return train_data, test_data
 
