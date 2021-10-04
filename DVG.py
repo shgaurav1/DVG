@@ -13,6 +13,7 @@ import progressbar, pdb
 import numpy as np
 import gpytorch
 from models.gp_models import GPRegressionLayer1
+from pytorch_ssim import SSIM
 from typing import List
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -28,9 +29,9 @@ parser.add_argument('--model_dir', default='', help='base directory to save logs
 parser.add_argument('--name', default='', help='identifier for directory')
 parser.add_argument('--data_root', default='data', help='root directory for data')
 parser.add_argument('--optimizer', default='adam', help='optimizer to train with')
-parser.add_argument('--niter', type=int, default=601, help='number of epochs to train for')
+parser.add_argument('--niter', type=int, default=1200, help='number of epochs to train for')
 parser.add_argument('--seed', default=1, type=int, help='manual seed')
-parser.add_argument('--epoch_size', type=int, default=300, help='epoch size')
+#parser.add_argument('--epoch_size', type=int, default=300, help='epoch size')
 parser.add_argument('--image_width', type=int, default=64, help='the height / width of the input image to network')
 parser.add_argument('--channels', default=1, type=int)
 parser.add_argument('--dataset', default='kth', help='dataset to train with')
@@ -52,6 +53,8 @@ parser.add_argument('--model_path', type=str, default='', help='model pth file w
 parser.add_argument('--home_dir', type=str, default='.', help='Where to save gifs, models, etc')
 parser.add_argument('--test', type=bool, default=False, help="whether to train or test the model")
 parser.add_argument('--run_name', type=str, default='', help='name of run')
+parser.add_argument('--encoder_only', type=bool, default=False, help='whether to train only encoder')
+parser.add_argument('--loss', default="mse", help='loss function to use (mse | l1 | ssim)')
 
 opt = parser.parse_args()
 print("Random Seed: ", opt.seed)
@@ -68,14 +71,19 @@ dtype = torch.cuda.FloatTensor
 # --------- load a dataset ------------------------------------
 train_data, test_data = utils.load_dataset(opt, bands_to_keep=RGB_BANDS)
 
+num_workers = opt.data_threads
+if opt.dataset == "satellite":
+    print("Satellite dataset only works with num_workers=1")
+    num_workers = 1
+
 train_loader = DataLoader(train_data,
-                          num_workers=opt.data_threads,
+                          num_workers=num_workers,
                           batch_size=opt.batch_size,
                           shuffle=True,
                           drop_last=True,
                           pin_memory=True)
 test_loader = DataLoader(test_data,
-                         num_workers=opt.data_threads,
+                         num_workers=num_workers,
                          batch_size=opt.batch_size,
                          shuffle=True,
                          drop_last=True,
@@ -86,20 +94,27 @@ test_loader = DataLoader(test_data,
 print(opt)
 
 dataset = opt.dataset
+encoder_only = opt.encoder_only
+lr = opt.lr
+loss_type = opt.loss
 
 if opt.model_path == '':
     if opt.test:
         raise ValueError('Must specify model path if testing')
 
     # ---------------- initialize the new model -------------
+    from models import dcgan_64, vgg_64
+    if opt.model == 'dcgan':
+        encoder = dcgan_64.encoder(opt.g_dim, opt.channels)
+        decoder = dcgan_64.decoder(opt.g_dim, opt.channels)
+    else:
+        encoder = vgg_64.encoder(opt.g_dim, opt.channels)
+        decoder = vgg_64.decoder(opt.g_dim, opt.channels)
 
-    import models.dcgan_64 as model
-    import models.lstm as lstm_models
-    encoder = model.encoder(opt.g_dim, opt.channels)
-    decoder = model.decoder(opt.g_dim, opt.channels)
     encoder.apply(utils.init_weights)
     decoder.apply(utils.init_weights)
 
+    import models.lstm as lstm_models 
     frame_predictor = lstm_models.lstm(opt.g_dim, opt.g_dim, opt.rnn_size, opt.predictor_rnn_layers, opt.batch_size)
     frame_predictor.apply(utils.init_weights)
 
@@ -120,9 +135,9 @@ frame_predictor.cuda()
 
 
 # ---------------- optimizers ----------------
-frame_predictor_optimizer = torch.optim.Adam(frame_predictor.parameters(), lr = 0.002)
-encoder_optimizer = torch.optim.Adam(encoder.parameters(),lr = 0.002)
-decoder_optimizer = torch.optim.Adam(decoder.parameters(),lr = 0.002)
+frame_predictor_optimizer = torch.optim.Adam(frame_predictor.parameters(), lr = lr)
+encoder_optimizer = torch.optim.Adam(encoder.parameters(),lr = lr)
+decoder_optimizer = torch.optim.Adam(decoder.parameters(),lr = lr)
 
 
 # ---------------- GP initialization ----------------------
@@ -143,11 +158,32 @@ scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[3, 5], g
 mll = gpytorch.mlls.VariationalELBO(likelihood, gp_layer, num_data=opt.batch_size, combine_terms=True)
 
 # --------- loss functions ------------------------------------
-mse_criterion = nn.MSELoss()#losses.TotalLoss()#
-mse_latent_criterion = nn.MSELoss()
+if loss_type == "ssim":
+    ssim = SSIM().cuda()
+    loss_func = lambda pred, gt: 1 - ssim(pred, gt)
+    latent_loss_func = SSIM().cuda()
+elif loss_type == "l1":
+    loss_func = nn.L1Loss().cuda()
+elif loss_type == "mse":
+    loss_func = nn.MSELoss().cuda()
+elif loss_type.startswith("ssim_mse_point"):
+    ssim = SSIM().cuda()
+    mse = nn.MSELoss().cuda()
+    if loss_type.endswith("point01"):
+        mse_weight = 0.01
+    elif loss_type.endswith("point1"):
+        mse_weight = 0.1
+    elif loss_type.endswith("point001"):
+        mse_weight = 0.001
+    loss_func = lambda pred, gt:  mse_weight*mse(pred, gt) + 1 - ssim(pred, gt)
 
-mse_criterion.cuda()
-mse_latent_criterion.cuda()
+else:
+    raise ValueError(f"Loss type {loss_type} not recognized")
+
+latent_loss_func = nn.MSELoss()
+
+#loss_func.cuda()
+latent_loss_func.cuda()
 
 def get_training_batch():
     while True:
@@ -166,68 +202,98 @@ def get_testing_batch():
 testing_batch_generator = get_testing_batch()
 
 # # --------- training funtions ------------------------------------
-def train(x,epoch, tb_writer):
+def train(x, global_step, tb_writer):
     encoder.zero_grad()
     decoder.zero_grad()
-    frame_predictor.zero_grad()
 
-    # initialize the hidden state.
-    frame_predictor.hidden = frame_predictor.init_hidden()
+    if encoder_only:
+        ae_loss = 0
+        for i in range(1, opt.n_past+opt.n_future):
+            h_pred = encoder(x[i])[0]
+            if opt.last_frame_skip or i < opt.n_past:   
+                skip = encoder(x[i-1])[1]
 
-    # pdb.set_trace()
-    mse = 0
-    mse_latent = 0
-    mse_gp = 0
-    max_ll = 0
-    ae_mse = 0
-    for i in range(1, opt.n_past+opt.n_future):
-        h = encoder(x[i-1])
-        h_target = encoder(x[i])[0]
-
-        if opt.last_frame_skip or i < opt.n_past:   
-            h, skip = h
-        else:
-            h = h[0]
+            decoded = decoder([h_pred, skip])
+            assert x[i].shape == decoded.shape
+            ae_loss += loss_func(decoded, x[i])
+            torch.cuda.empty_cache()
         
-        h_pred = frame_predictor(h)                         # Target encoding using LSTM
-        mse_latent += mse_latent_criterion(h_pred,h_target) # LSTM loss - how well LSTM predicts next encoding
+        ae_loss.backward()
+        
+        if loss_type == "l1":
+            tb_writer.add_scalar(f"Step Loss/Encoder l1", ae_loss, global_step)
+        elif loss_type == "ssim":
+            tb_writer.add_scalar(f"Step Loss/Encoder ssim", ae_loss, global_step)
+        else:
+            tb_writer.add_scalar(f"Step Loss/Encoder {loss_type}", ae_loss, global_step)
 
-        gp_pred = gp_layer(h.transpose(0,1).view(90,opt.batch_size,1))#likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))#
-        max_ll -= mll(gp_pred,h_target.transpose(0,1))      # GP Loss - how well GP predicts next encoding
-        x_pred = decoder([h_pred, skip])                    # Decoded LSTM prediction
+        encoder_optimizer.step()
+        decoder_optimizer.step()
 
-        x_target_pred = decoder([h_target, skip])           # Decoded target encoding
-        ae_mse += mse_latent_criterion(x_target_pred,x[i])  # Encoder loss - how well the encoder encodes
-
-        x_pred_gp = decoder([gp_pred.mean.transpose(0,1), skip])    # Decoded GP prediction
-        mse += mse_criterion(x_pred, x[i])                          # Encoder + LSTM loss - how well the encoder+LSTM predicts the next frame
-        mse_gp += mse_latent_criterion(x_pred_gp, x[i])             # Encoder + GP loss - how well the encoder+GP predicts the next frame
-        torch.cuda.empty_cache()
+        return ae_loss.data.cpu().numpy()/(opt.n_past+opt.n_future)
+    
+    else:
 
 
-    encoder_weight = 100
-    alpha = 1
-    beta = 0.1
-    loss = encoder_weight*ae_mse + alpha*mse+ alpha*mse_latent + beta*mse_gp + beta*max_ll.sum()  # + kld*opt.beta
+        frame_predictor.zero_grad()
 
-    tb_writer.add_scalar("Loss/Encoder - AE MSE", ae_mse, epoch)
-    tb_writer.add_scalar("Loss/Encoder and LSTM - MSE", mse, epoch)
-    tb_writer.add_scalar("Loss/LSTM - MSE LATENT", mse_latent, epoch)
-    tb_writer.add_scalar("Loss/Encoder and GP loss - MSE GP", mse_gp, epoch)
-    tb_writer.add_scalar("Loss/GP loss - Max ll", max_ll.sum(), epoch)
-    tb_writer.add_scalar("Loss/Total", loss, epoch)
+        # initialize the hidden state.
+        frame_predictor.hidden = frame_predictor.init_hidden()
 
-    loss.backward()
+        # pdb.set_trace()
+        lstm_loss = 0
+        latent_loss = 0
+        gp_loss = 0
+        max_ll = 0
+        ae_loss = 0
+        for i in range(1, opt.n_past+opt.n_future):
+            h = encoder(x[i-1])
+            h_target = encoder(x[i])[0]
 
-    frame_predictor_optimizer.step()
-    encoder_optimizer.step()
-    decoder_optimizer.step()
-    optimizer.step()
+            if opt.last_frame_skip or i < opt.n_past:   
+                h, skip = h
+            else:
+                h = h[0]
+            
+            h_pred = frame_predictor(h)                         # Target encoding using LSTM
+            latent_loss  += latent_loss_func(h_pred,h_target) # LSTM loss - how well LSTM predicts next encoding
 
-    return mse_latent.data.cpu().numpy()/(opt.n_past+opt.n_future)
+            gp_pred = gp_layer(h.transpose(0,1).view(90,opt.batch_size,1))#likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))#
+            max_ll -= mll(gp_pred,h_target.transpose(0,1))      # GP Loss - how well GP predicts next encoding
+            x_pred = decoder([h_pred, skip])                    # Decoded LSTM prediction
+
+            x_target_pred = decoder([h_target, skip])           # Decoded target encoding
+            ae_loss += latent_loss_func(x_target_pred,x[i])  # Encoder loss - how well the encoder encodes
+
+            x_pred_gp = decoder([gp_pred.mean.transpose(0,1), skip])    # Decoded GP prediction
+            lstm_loss += loss_func(x_pred, x[i])                          # Encoder + LSTM loss - how well the encoder+LSTM predicts the next frame
+            gp_loss += latent_loss_func(x_pred_gp, x[i])             # Encoder + GP loss - how well the encoder+GP predicts the next frame
+            torch.cuda.empty_cache()
+
+
+        encoder_weight = 100
+        alpha = 1
+        beta = 0.1
+        loss = encoder_weight*ae_loss + alpha*lstm_loss+ alpha*latent_loss  + beta*gp_loss + beta*max_ll.sum()  # + kld*opt.beta
+
+        tb_writer.add_scalar("Step Loss/Encoder", ae_loss, global_step)
+        tb_writer.add_scalar("Step Loss/Encoder and LSTM", lstm_loss, global_step)
+        tb_writer.add_scalar("Step Loss/LSTM", latent_loss , global_step)
+        tb_writer.add_scalar("Step Loss/Encoder and GP loss", gp_loss, global_step)
+        tb_writer.add_scalar("Step Loss/GP loss", max_ll.sum(), global_step)
+        tb_writer.add_scalar("Step Loss/Total", loss, global_step)
+
+        loss.backward()
+
+        frame_predictor_optimizer.step()
+        encoder_optimizer.step()
+        decoder_optimizer.step()
+        optimizer.step()
+
+        return loss.data.cpu().numpy()/(opt.n_past+opt.n_future)
 
 # --------- predicting functions ------------------------------------
-def predict(x, index_to_use_gp_layer: int = opt.n_past) -> List[torch.Tensor]:
+def predict(x, interval_for_gp_layer: int = 10) -> List[torch.Tensor]:
     frame_predictor.hidden = frame_predictor.init_hidden() # Initialize LSTM hidden state
     gen_seq = [x[0]]
     for i in range(1, opt.n_eval):
@@ -245,7 +311,7 @@ def predict(x, index_to_use_gp_layer: int = opt.n_past) -> List[torch.Tensor]:
         
         # Use the GP layer to predict the next time step
         # Previously i%10 was used for longer sequences
-        if i == index_to_use_gp_layer: 
+        if i % interval_for_gp_layer == 0: 
             h_pred_from_gp_layer = likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))
             h_pred = h_pred_from_gp_layer.rsample().transpose(0,1)
         
@@ -259,11 +325,33 @@ def predict(x, index_to_use_gp_layer: int = opt.n_past) -> List[torch.Tensor]:
 
     return gen_seq
 
+def predict_decoding(x) -> List[torch.Tensor]:
+    gen_seq = [x[0]]
+    for i in range(1, opt.n_eval):
+
+        # Encode the input time step
+        h = encoder(x[i-1])   
+        if opt.last_frame_skip or i < opt.n_past:   
+            h, skip = h     # Extract encoding and skip-connection?
+        else:
+            h, _ = h        # Extract encoding only
+        h = h.detach()
+
+        h_target = encoder(x[i])[0].detach()
+        decoded_h_target= decoder([h_target,skip]).detach()
+        gen_seq.append(decoded_h_target)
+
+    return gen_seq
+
 # --------- plotting funtions ------------------------------------
 def plot(x, epoch):
     nsample = 5
     gt_seq = [x[i] for i in range(len(x))]
-    gen_seq = [predict(x) for _ in range(nsample)]
+
+    if encoder_only:
+        gen_seq = [predict_decoding(x)]
+    else:
+        gen_seq = [predict(x) for _ in range(nsample)]
 
 
     # -------------- creating the GIFs ---------------------------
@@ -275,21 +363,24 @@ def plot(x, epoch):
         row = [gt_seq[t][i] for t in range(opt.n_eval)] 
         to_plot.append(row)
 
-        # Finds best sequence (lowest loss)
-        min_mse = 1e7
-        for s in range(nsample):
-            mse = 0
-            for t in range(opt.n_eval):
-                mse +=  torch.sum( (gt_seq[t][i].data.cpu() - gen_seq[s][t][i].data.cpu())**2 )
-            if mse < min_mse:
-                min_mse = mse
-                min_idx = s
+        if encoder_only:
+            s_list = [0]
+        else:
+            # Finds best sequence (lowest loss)
+            min_mse = 1e7
+            for s in range(nsample):
+                mse = 0
+                for t in range(opt.n_eval):
+                    mse +=  torch.sum( (gt_seq[t][i].data.cpu() - gen_seq[s][t][i].data.cpu())**2 )
+                if mse < min_mse:
+                    min_mse = mse
+                    min_idx = s
 
-        s_list = [min_idx, 
-                  np.random.randint(nsample), 
-                  np.random.randint(nsample), 
-                  np.random.randint(nsample), 
-                  np.random.randint(nsample)]
+            s_list = [min_idx, 
+                    np.random.randint(nsample), 
+                    np.random.randint(nsample), 
+                    np.random.randint(nsample), 
+                    np.random.randint(nsample)]
         
         # Add to images
         for s in s_list:
@@ -323,6 +414,9 @@ def plot(x, epoch):
         file_name = opt.run_name
     else:
         file_name = f"end2end_gp_ctrl_sample_{epoch}"
+
+    if encoder_only:
+        file_name += "_autoencoders"
 
     img_path = home_dir / f'imgs/{dataset}/{file_name}.png'
     img_path.parent.mkdir(parents=True, exist_ok=True)
@@ -389,6 +483,7 @@ if opt.test:
 # --------- training loop ------------------------------------
 else:
     writer = SummaryWriter(log_dir=f"runs/{dataset}/{opt.run_name}" if opt.run_name else None)
+    epoch_size = len(train_loader)
     with gpytorch.settings.max_cg_iterations(45):
         for epoch in range(opt.niter):
             gp_layer.train()
@@ -398,21 +493,28 @@ else:
             decoder.train()
             scheduler.step()
 
-            epoch_mse = 0
-            epoch_ls = 0
-            progress = progressbar.ProgressBar(opt.epoch_size).start()
+            epoch_loss = 0
+            progress = progressbar.ProgressBar(epoch_size).start()
             
-            for i in range(opt.epoch_size):
+            for i in range(epoch_size):
                 
                 progress.update(i+1)
                 x = next(training_batch_generator)
-                mse_ctrl = train(x, epoch, writer) 
-                epoch_mse += mse_ctrl 
+                global_step=epoch * epoch_size + i
+                batch_loss = train(x, global_step, writer) 
+                epoch_loss += batch_loss
 
             progress.finish()
             utils.clear_progressbar()
 
-            print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, epoch_mse/opt.epoch_size, epoch*opt.epoch_size*opt.batch_size, mse_ctrl))
+            mean_epoch_loss = epoch_loss/epoch_size
+            if encoder_only:
+                writer.add_scalar(f"Epoch Loss/Encoder {loss_type}", mean_epoch_loss, epoch)
+            else:
+                writer.add_scalar("Epoch Loss/Total", mean_epoch_loss, epoch)
+            
+            print('[%02d] mse loss: %.5f (%d) %.5f' % (epoch, mean_epoch_loss, epoch*epoch_size*opt.batch_size, batch_loss))
+            
             if epoch % 4 == 0:
             
                 # plot some stuff
@@ -428,7 +530,11 @@ else:
                     model_name = opt.run_name
                 else:
                     model_name = f'e2e_{dataset}_model'
-                model_path = home_dir / f'model_dump/{model_name}.pth'
+                
+                if encoder_only:
+                    model_name += '_autoencoder'
+
+                model_path = home_dir / f'model_dump/{dataset}/{model_name}.pth'
                 model_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save({
                     'encoder': encoder,
