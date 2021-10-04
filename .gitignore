@@ -2,6 +2,7 @@
 __pycache__
 data/processed
 data/raw
+data/bair
 gifs
 imgs
 model_dump
