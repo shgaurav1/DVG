@@ -1,0 +1,44 @@
+{
+    "satellite": {
+        "model_dump/satellite/encoder_l1_loss_minmax_autoencoder.pth": {
+            "mse": 0.0011186500757921867,
+            "l1": 0.02482764123175236,
+            "ssim": 0.8925303087036626
+        },
+        "model_dump/satellite/encoder_l1_loss_autoencoder.pth": {
+            "mse": 0.0007842473996428356,
+            "l1": 0.018971211531154164,
+            "ssim": 0.8799732777593244
+        },
+        "model_dump/satellite/encoder_corrected_autoencoder.pth": {
+            "mse": 0.0007569646276493836,
+            "l1": 0.01858954111535211,
+            "ssim": 0.8819144028318084
+        },
+        "model_dump/satellite/encoder_corrected_lr_point_0001_autoencoder.pth": {
+            "mse": 0.0009100749580321461,
+            "l1": 0.020598662321248858,
+            "ssim": 0.8655892950169704
+        },
+        "model_dump/satellite/encoder_corrected_lr_point01_autoencoder.pth": {
+            "mse": 0.0009466717213293243,
+            "l1": 0.021851672075658614,
+            "ssim": 0.8727062716916949
+        },
+        "model_dump/satellite/encoder_ssim_1minus_autoencoder.pth": {
+            "mse": 0.001069574825740704,
+            "l1": 0.0236982114579214,
+            "ssim": 0.8891546408877545
+        },
+        "model_dump/satellite/encoder_ssim_mse_point1_autoencoder.pth": {
+            "mse": 0.0006015801541957025,
+            "l1": 0.01687206096704344,
+            "ssim": 0.9035214537441464
+        },
+        "model_dump/satellite/encoder_ssim_mse_point01_autoencoder.pth": {
+            "mse": 0.000635492701918427,
+            "l1": 0.017181852508630368,
+            "ssim": 0.8927987553390623
+        }
+    }
+}
