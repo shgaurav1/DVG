@@ -20,8 +20,6 @@ from data.satellite import SatelliteData
 
 hostname = socket.gethostname()
 
-use_satellite_normalization = True
-
 def load_dataset(opt, bands_to_keep):
     if opt.dataset == 'smmnist':
         train_data = MovingMNIST(
@@ -76,12 +74,14 @@ def load_dataset(opt, bands_to_keep):
                 train=True, 
                 data_root=opt.data_root,
                 bands_to_keep=bands_to_keep,
-                seq_len=opt.n_past+opt.n_future)
+                seq_len=opt.n_past+opt.n_future,
+                )
         test_data = SatelliteData(
                 train=False, 
                 data_root=opt.data_root,
                 bands_to_keep=bands_to_keep,
-                seq_len=opt.n_eval)
+                seq_len=opt.n_eval,
+                )
 
     return train_data, test_data
 
