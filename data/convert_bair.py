@@ -5,8 +5,12 @@ import numpy as np
 from PIL import Image
 import tensorflow as tf
 
-from tensorflow.python.platform import flags
 from tensorflow.python.platform import gfile
+
+try:
+    from tensorflow import python_io
+except ImportError:
+    from tensorflow.compat.v1 import python_io
 
 from scipy.misc import imresize
 from scipy.misc import imsave
@@ -28,7 +32,7 @@ def get_seq(dname):
         k=0
 
 
-        for serialized_example in tf.python_io.tf_record_iterator(f):
+        for serialized_example in python_io.tf_record_iterator(f):
             image_seq = []
             for _ in range(4):
                 example = tf.train.Example()
