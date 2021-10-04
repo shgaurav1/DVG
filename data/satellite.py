@@ -7,9 +7,14 @@ import xarray as xr
 
 from pathlib import Path
 from rasterio.plot import reshape_as_image
+from enum import Enum
 from typing import Optional
 from .convert_satellite import BANDS_WITH_NDVI
 
+class Normalization(Enum):
+    Z = "z"
+    MINMAX = "minmax"
+    SKIP = "skip"
 
 RGB_BANDS = ["B4", "B3", "B2"]
 ALL_BANDS = BANDS_WITH_NDVI
@@ -19,21 +24,26 @@ class SatelliteData(object):
     
     """Data Handler that loads satellite data."""
 
-    def __init__(self, data_root, bands_to_keep=RGB_BANDS, train=True, seq_len=12, skip_normalize=False, no_randomization=False):
+    def __init__(self, data_root, bands_to_keep=RGB_BANDS, train=True, seq_len=12, normalization=Normalization.MINMAX, no_randomization=False):
 
         self.bands_to_keep = bands_to_keep
         self.seq_len = seq_len
-        self.skip_normalize = skip_normalize
+        self.normalization = normalization
         self.no_randomization = no_randomization
+
 
         with (Path(data_root) / "normalizing_dict.json").open() as f:
             normalizing_dict = json.load(f)
             bands = len(normalizing_dict["mean"])
             all_mean = np.array(normalizing_dict["mean"]).reshape(bands, 1, 1)
             all_std = np.array(normalizing_dict["std"]).reshape(bands, 1, 1)
+            all_max = np.array(normalizing_dict["max"]).reshape(bands, 1, 1)
+            all_min = np.array(normalizing_dict["min"]).reshape(bands, 1, 1)
             norm_index = [BANDS_WITH_NDVI.index(b) for b in bands_to_keep]
             self.std = all_std[norm_index]
             self.mean = all_mean[norm_index]
+            self.max = all_max[norm_index]
+            self.min = all_min[norm_index]
 
         if train:
             data_root_subset = Path(data_root) / "train" 
@@ -64,10 +74,24 @@ class SatelliteData(object):
         return np.nan_to_num(array, nan=nan)
 
     def _normalize(self, array: np.ndarray) -> np.ndarray:
-        return ((array - self.mean) / self.std)
+        if self.normalization is Normalization.SKIP:
+            return array
+        elif self.normalization == Normalization.Z:
+            return (array - self.mean) / self.std
+        elif self.normalization == Normalization.MINMAX:
+            return (array - self.min) / (self.max - self.min)
+        else:
+            raise ValueError(f"Unknown normalization: {self.normalization}")
 
-    def unnormalize(self, array: np.ndarray) -> np.ndarray:
-        return (array * self.std) + self.mean
+    def _unnormalize(self, array: np.ndarray) -> np.ndarray:
+        if self.normalization is Normalization.SKIP:
+            return array
+        elif self.normalization == Normalization.Z:
+            return (array * self.std) + self.mean
+        elif self.normalization == Normalization.MINMAX:
+            return (array * (self.max - self.min)) + self.min
+        else:
+            raise ValueError(f"Unknown normalization: {self.normalization}")
 
           
     def __len__(self):
@@ -111,8 +135,7 @@ class SatelliteData(object):
         tile = self.remove_bands(tile)
         assert tile.shape == (self.seq_len, len(self.bands_to_keep), 64, 64), tile.shape
 
-        if not self.skip_normalize:
-            tile = self._normalize(tile)
+        tile = self._normalize(tile)
         
         return torch.from_numpy(tile)
 
@@ -131,9 +154,8 @@ class SatelliteData(object):
         array_min, array_max = array.min(), array.max()
         return (array - array_min) / (array_max - array_min)
 
-    def for_viewing(self, tile: np.ndarray, unnormalize: bool = True) -> np.ndarray:
-        if unnormalize:
-            tile = self.unnormalize(tile)
+    def for_viewing(self, tile: np.ndarray) -> np.ndarray:
+        tile = self._unnormalize(tile)
 
         # Extract reference to Red, Green, Blue in image
         rgb_index = np.array([self.bands_to_keep.index(b) for b in RGB_BANDS])
