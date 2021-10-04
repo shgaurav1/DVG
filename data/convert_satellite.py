@@ -108,6 +108,16 @@ def update_normalizing_values(norm_dict: Dict[str, Union[np.ndarray, int]], arra
     if "mean" not in norm_dict:
         norm_dict["mean"] = np.zeros(num_bands)
         norm_dict["M2"] = np.zeros(num_bands)
+        norm_dict["max"] = np.zeros(num_bands)
+        norm_dict["min"] = np.ones(num_bands)
+
+    # NOT TESTED
+    band_max = array.max(axis=(0,2,3))
+    band_min = array.min(axis=(0,2,3))
+    max_idx = band_max > norm_dict["max"]
+    min_idx = band_min < norm_dict["min"]
+    norm_dict["max"][max_idx] = band_max[max_idx]
+    norm_dict["min"][min_idx] = band_min[min_idx]
 
     for time_idx in range(num_timesteps):
         norm_dict["n"] += 1
@@ -123,7 +133,7 @@ def calculate_normalizing_dict(norm_dict: Dict[str, Union[np.ndarray, int]]
     ) -> Optional[Dict[str, np.ndarray]]:
         variance = norm_dict["M2"] / (norm_dict["n"] - 1)
         std = np.sqrt(variance)
-        return {"mean": norm_dict["mean"].tolist(), "std": std.tolist()}
+        return {"mean": norm_dict["mean"].tolist(), "std": std.tolist(), "max": norm_dict["max"].tolist(), "min": norm_dict["min"].tolist()}
 
 def main(tif_dir: str, processed_dir: str, tile_size: int = 64):
     all_tif_paths = list(Path(tif_dir).glob("**/*.tif"))
