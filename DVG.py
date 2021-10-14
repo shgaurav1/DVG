@@ -54,9 +54,9 @@ parser.add_argument('--model_path', type=str, default='', help='model pth file w
 parser.add_argument('--home_dir', type=str, default='.', help='Where to save gifs, models, etc')
 parser.add_argument('--test', type=bool, default=False, help="whether to train or test the model")
 parser.add_argument('--run_name', type=str, default='', help='name of run')
-parser.add_argument('--encoder_only', type=bool, default=False, help='whether to train only encoder')
-parser.add_argument('--loss', default="mse", help='loss function to use (mse | l1 | ssim)')
-parser.add_argument('--normalization', type=str, default="z", help='normalization to use (z | minmax | skip')
+parser.add_argument('--loss', default="mse", help='loss function to use (mse | l1 | ssim | ssim_mse_point1 | ssim_mse_point01 | ssim_l1_point1 | ssim_l1_point01 )')
+parser.add_argument('--normalization', type=str, default="z", help='normalization to use (z | minmax | skip | clip5_minmax | clip4_minmax | clip3_minmax)')
+parser.add_argument('--components', type=str, default="all", help='components to train (encoder | encoder_lstm | all)')
 
 opt = parser.parse_args()
 print("Random Seed: ", opt.seed)
@@ -70,33 +70,9 @@ home_dir = Path(opt.home_dir)
 torch.cuda.manual_seed_all(opt.seed)
 dtype = torch.cuda.FloatTensor
 
-# --------- load a dataset ------------------------------------
-train_data, test_data = utils.load_dataset(opt, bands_to_keep=RGB_BANDS, normalization=Normalization(opt.normalization))
-
-num_workers = opt.data_threads
-if opt.dataset == "satellite":
-    print("Satellite dataset only works with num_workers=1")
-    num_workers = 1
-
-train_loader = DataLoader(train_data,
-                          num_workers=num_workers,
-                          batch_size=opt.batch_size,
-                          shuffle=True,
-                          drop_last=True,
-                          pin_memory=True)
-test_loader = DataLoader(test_data,
-                         num_workers=num_workers,
-                         batch_size=opt.batch_size,
-                         shuffle=True,
-                         drop_last=True,
-                         pin_memory=True)
-
 # ---------------- load the models  ----------------
-
 print(opt)
 
-dataset = opt.dataset
-encoder_only = opt.encoder_only
 lr = opt.lr
 loss_type = opt.loss
 
@@ -130,10 +106,40 @@ else:
     decoder = model['decoder']
     frame_predictor = model['frame_predictor']
 
+    opt_dict = vars(model['opt'])
+    for opt_key in ["data_root", "dataset", "n_past", "n_future", "n_eval", "image_width", "channels", "components", "normalization"]:
+        if opt_key in opt_dict:
+            setattr(opt, opt_key, opt_dict[opt_key])
+
+assert opt.components in ["encoder", "encoder_lstm", "all"]
+encoder_only = opt.components == "encoder"
+encoder_lstm_only = opt.components == "encoder_lstm"
+
 # ---------------- models tranferred to GPU ----------------
 encoder.cuda()
 decoder.cuda()
 frame_predictor.cuda()
+
+# --------- load a dataset ------------------------------------
+train_data, test_data = utils.load_dataset(opt, bands_to_keep=RGB_BANDS, normalization=Normalization(opt.normalization))
+
+num_workers = opt.data_threads
+if opt.dataset == "satellite":
+    print("Satellite dataset only works with num_workers=1")
+    num_workers = 1
+
+train_loader = DataLoader(train_data,
+                          num_workers=num_workers,
+                          batch_size=opt.batch_size,
+                          shuffle=True,
+                          drop_last=True,
+                          pin_memory=True)
+test_loader = DataLoader(test_data,
+                         num_workers=num_workers,
+                         batch_size=opt.batch_size,
+                         shuffle=True,
+                         drop_last=True,
+                         pin_memory=True)
 
 
 # ---------------- optimizers ----------------
@@ -166,26 +172,36 @@ mse = nn.MSELoss().cuda()
 l1 = nn.L1Loss().cuda()
 
 if loss_type == "ssim":
-    loss_func = lambda pred, gt: 1 - ssim(pred, gt)
+    reconstruction_loss_func = lambda pred, gt: 1 - ssim(pred, gt)
 elif loss_type == "l1":
-    loss_func = l1
+    reconstruction_loss_func = l1
 elif loss_type == "mse":
-    loss_func = mse
-elif loss_type.startswith("ssim_mse_point"):
+    reconstruction_loss_func = mse
+elif loss_type.startswith("ssim_mse"):
     if loss_type.endswith("point01"):
         mse_weight = 0.01
     elif loss_type.endswith("point1"):
         mse_weight = 0.1
     elif loss_type.endswith("point001"):
         mse_weight = 0.001
-    loss_func = lambda pred, gt:  mse_weight*mse(pred, gt) + 1 - ssim(pred, gt)
+    else:
+        mse_weight = 1
+    reconstruction_loss_func = lambda pred, gt:  mse_weight*mse(pred, gt) + 1 - ssim(pred, gt)
+elif loss_type.startswith("ssim_l1"):
+    if loss_type.endswith("point01"):
+        l1_weight = 0.01
+    elif loss_type.endswith("point1"):
+        l1_weight = 0.1
+    elif loss_type.endswith("point001"):
+        l1_weight = 0.001
+    else:
+        l1_weight = 1
+    reconstruction_loss_func = lambda pred, gt:  l1_weight*l1(pred, gt) + 1 - ssim(pred, gt)
 
 else:
     raise ValueError(f"Loss type {loss_type} not recognized")
 
 latent_loss_func = nn.MSELoss()
-
-#loss_func.cuda()
 latent_loss_func.cuda()
 
 def get_training_batch():
@@ -218,17 +234,12 @@ def train(x, global_step, tb_writer):
 
             decoded = decoder([h_pred, skip])
             assert x[i].shape == decoded.shape
-            ae_loss += loss_func(decoded, x[i])
+            ae_loss += reconstruction_loss_func(decoded, x[i])
             torch.cuda.empty_cache()
         
         ae_loss.backward()
-        
-        if loss_type == "l1":
-            tb_writer.add_scalar(f"Step Loss/Encoder l1", ae_loss, global_step)
-        elif loss_type == "ssim":
-            tb_writer.add_scalar(f"Step Loss/Encoder ssim", ae_loss, global_step)
-        else:
-            tb_writer.add_scalar(f"Step Loss/Encoder {loss_type}", ae_loss, global_step)
+
+        tb_writer.add_scalar(f"Step Loss/Encoder {loss_type}", ae_loss, global_step)
 
         encoder_optimizer.step()
         decoder_optimizer.step()
@@ -261,29 +272,36 @@ def train(x, global_step, tb_writer):
             h_pred = frame_predictor(h)                         # Target encoding using LSTM
             latent_loss  += latent_loss_func(h_pred,h_target) # LSTM loss - how well LSTM predicts next encoding
 
-            gp_pred = gp_layer(h.transpose(0,1).view(90,opt.batch_size,1))#likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))#
-            max_ll -= mll(gp_pred,h_target.transpose(0,1))      # GP Loss - how well GP predicts next encoding
+            if not encoder_lstm_only:
+                gp_pred = gp_layer(h.transpose(0,1).view(90,opt.batch_size,1))#likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))#
+                max_ll -= mll(gp_pred,h_target.transpose(0,1))      # GP Loss - how well GP predicts next encoding
             x_pred = decoder([h_pred, skip])                    # Decoded LSTM prediction
 
             x_target_pred = decoder([h_target, skip])           # Decoded target encoding
-            ae_loss += latent_loss_func(x_target_pred,x[i])  # Encoder loss - how well the encoder encodes
+            ae_loss += reconstruction_loss_func(x_target_pred,x[i])  # Encoder loss - how well the encoder encodes
 
-            x_pred_gp = decoder([gp_pred.mean.transpose(0,1), skip])    # Decoded GP prediction
-            lstm_loss += loss_func(x_pred, x[i])                          # Encoder + LSTM loss - how well the encoder+LSTM predicts the next frame
-            gp_loss += latent_loss_func(x_pred_gp, x[i])             # Encoder + GP loss - how well the encoder+GP predicts the next frame
+            if not encoder_lstm_only:
+                x_pred_gp = decoder([gp_pred.mean.transpose(0,1), skip])    # Decoded GP prediction
+            lstm_loss += reconstruction_loss_func(x_pred, x[i])                          # Encoder + LSTM loss - how well the encoder+LSTM predicts the next frame
+            if not encoder_lstm_only:
+                gp_loss += reconstruction_loss_func(x_pred_gp, x[i])             # Encoder + GP loss - how well the encoder+GP predicts the next frame
             torch.cuda.empty_cache()
 
 
         encoder_weight = 100
         alpha = 1
         beta = 0.1
-        loss = encoder_weight*ae_loss + alpha*lstm_loss+ alpha*latent_loss  + beta*gp_loss + beta*max_ll.sum()  # + kld*opt.beta
+        loss = encoder_weight*ae_loss + alpha*lstm_loss+ alpha*latent_loss  # + kld*opt.beta
+        if not encoder_lstm_only:
+            loss += beta*gp_loss + beta*max_ll.sum()
 
-        tb_writer.add_scalar("Step Loss/Encoder", ae_loss, global_step)
+        tb_writer.add_scalar(f"Step Loss/Encoder {loss_type}", ae_loss, global_step)
         tb_writer.add_scalar("Step Loss/Encoder and LSTM", lstm_loss, global_step)
         tb_writer.add_scalar("Step Loss/LSTM", latent_loss , global_step)
-        tb_writer.add_scalar("Step Loss/Encoder and GP loss", gp_loss, global_step)
-        tb_writer.add_scalar("Step Loss/GP loss", max_ll.sum(), global_step)
+
+        if not encoder_lstm_only:
+            tb_writer.add_scalar("Step Loss/Encoder and GP loss", gp_loss, global_step)
+            tb_writer.add_scalar("Step Loss/GP loss", max_ll.sum(), global_step)
         tb_writer.add_scalar("Step Loss/Total", loss, global_step)
 
         loss.backward()
@@ -314,7 +332,7 @@ def predict(x, interval_for_gp_layer: int = 10) -> List[torch.Tensor]:
         
         # Use the GP layer to predict the next time step
         # Previously i%10 was used for longer sequences
-        if i % interval_for_gp_layer == 0: 
+        if not encoder_lstm_only and i % interval_for_gp_layer == 0: 
             h_pred_from_gp_layer = likelihood(gp_layer(h.transpose(0,1).view(90,opt.batch_size,1)))
             h_pred = h_pred_from_gp_layer.rsample().transpose(0,1)
         
@@ -353,6 +371,8 @@ def plot(x, epoch):
 
     if encoder_only:
         gen_seq = [predict_decoding(x)]
+    elif encoder_lstm_only:
+        gen_seq = [predict(x)]
     else:
         gen_seq = [predict(x) for _ in range(nsample)]
 
@@ -366,7 +386,7 @@ def plot(x, epoch):
         row = [gt_seq[t][i] for t in range(opt.n_eval)] 
         to_plot.append(row)
 
-        if encoder_only:
+        if encoder_only or encoder_lstm_only:
             s_list = [0]
         else:
             # Finds best sequence (lowest loss)
@@ -421,12 +441,12 @@ def plot(x, epoch):
     if encoder_only:
         file_name += "_autoencoders"
 
-    img_path = home_dir / f'imgs/{dataset}/{file_name}.png'
+    img_path = home_dir / f'imgs/{opt.dataset}/{file_name}.png'
     img_path.parent.mkdir(parents=True, exist_ok=True)
     tensor_of_images = utils.save_tensors_image(str(img_path), to_plot)
     print(f"Saving image to: {img_path}")
 
-    gif_path = home_dir / f'gifs/{dataset}/{file_name}.gif'
+    gif_path = home_dir / f'gifs/{opt.dataset}/{file_name}.gif'
     gif_path.parent.mkdir(parents=True, exist_ok=True)
     utils.save_gif(str(gif_path), gifs)
     print(f"Saving images as gif: {gif_path}")
@@ -531,10 +551,10 @@ if opt.test:
         else:
             metrics_json = {}
 
-        if dataset not in metrics_json:
-            metrics_json[dataset] = {}
+        if opt.dataset not in metrics_json:
+            metrics_json[opt.dataset] = {}
 
-        metrics_json[dataset][opt.model_path] = metrics_for_test_set
+        metrics_json[opt.dataset][opt.model_path] = metrics_for_test_set
 
     # Write new metrics to metrics json file
     with open(metrics_json_path, "w") as f:
@@ -544,7 +564,7 @@ if opt.test:
 
 # --------- training loop ------------------------------------
 else:
-    writer = SummaryWriter(log_dir=f"runs/{dataset}/{opt.run_name}" if opt.run_name else None)
+    writer = SummaryWriter(log_dir=f"runs/{opt.dataset}/{opt.run_name}" if opt.run_name else None)
     epoch_size = len(train_loader)
     with gpytorch.settings.max_cg_iterations(45):
         for epoch in range(opt.niter):
@@ -591,12 +611,12 @@ else:
                 if opt.run_name:
                     model_name = opt.run_name
                 else:
-                    model_name = f'e2e_{dataset}_model'
+                    model_name = f'e2e_{opt.dataset}_model'
                 
                 if encoder_only:
                     model_name += '_autoencoder'
 
-                model_path = home_dir / f'model_dump/{dataset}/{model_name}.pth'
+                model_path = home_dir / f'model_dump/{opt.dataset}/{model_name}.pth'
                 model_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save({
                     'encoder': encoder,
