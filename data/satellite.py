@@ -12,6 +12,10 @@ class Normalization(Enum):
     Z = "z"
     MINMAX = "minmax"
     SKIP = "skip"
+    CLIP5_MINMAX = "clip5_minmax"
+    CLIP4_MINMAX = "clip4_minmax"
+    CLIP3_MINMAX = "clip3_minmax"
+
 
 RGB_BANDS = ["B4", "B3", "B2"]
 ALL_BANDS = BANDS_WITH_NDVI
@@ -41,6 +45,14 @@ class SatelliteData(object):
             self.mean = all_mean[norm_index]
             self.max = all_max[norm_index]
             self.min = all_min[norm_index]
+        
+        self.clip = 0
+        if self.normalization == Normalization.CLIP3_MINMAX:
+            self.clip = 0.3
+        elif self.normalization == Normalization.CLIP4_MINMAX:
+            self.clip = 0.4
+        elif self.normalization == Normalization.CLIP5_MINMAX:
+            self.clip = 0.5
 
         if train:
             data_root_subset = Path(data_root) / "train" 
@@ -70,6 +82,8 @@ class SatelliteData(object):
                 return None
         return np.nan_to_num(array, nan=nan)
 
+
+
     def _normalize(self, array: np.ndarray) -> np.ndarray:
         if self.normalization is Normalization.SKIP:
             return array
@@ -77,6 +91,11 @@ class SatelliteData(object):
             return (array - self.mean) / self.std
         elif self.normalization == Normalization.MINMAX:
             return (array - self.min) / (self.max - self.min)
+        elif self.normalization == Normalization.CLIP3_MINMAX or \
+            self.normalization == Normalization.CLIP4_MINMAX or \
+            self.normalization == Normalization.CLIP5_MINMAX:
+            array[array > self.clip] = self.clip
+            return array / self.clip
         else:
             raise ValueError(f"Unknown normalization: {self.normalization}")
 
@@ -87,6 +106,10 @@ class SatelliteData(object):
             return (array * self.std) + self.mean
         elif self.normalization == Normalization.MINMAX:
             return (array * (self.max - self.min)) + self.min
+        elif self.normalization == Normalization.CLIP3_MINMAX or \
+            self.normalization == Normalization.CLIP4_MINMAX or \
+            self.normalization == Normalization.CLIP5_MINMAX:
+            return array * self.clip
         else:
             raise ValueError(f"Unknown normalization: {self.normalization}")
 
@@ -152,6 +175,12 @@ class SatelliteData(object):
         return (array - array_min) / (array_max - array_min)
 
     def for_viewing(self, tile: np.ndarray) -> np.ndarray:
+        if self.normalization == Normalization.CLIP3_MINMAX or \
+            self.normalization == Normalization.CLIP4_MINMAX or \
+            self.normalization == Normalization.CLIP5_MINMAX:
+            # If clip normalization is used, return image as is it should be viewable
+            return tile
+
         tile = self._unnormalize(tile)
 
         # Extract reference to Red, Green, Blue in image
