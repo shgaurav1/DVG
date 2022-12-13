@@ -1,5 +1,5 @@
 # Diverse Video Generation
-This is code for the paper [Diverse Video Generation using a Gaussian Process Trigger](https://openreview.net/forum?id=Qm7R_SdqTpT) by [Gaurav Shrivastava](https://www.cs.umd.edu/~gauravsh/) and [Abhinav Shrivastava](https://www.cs.umd.edu/~abhinav/). 
+This is code for the paper [Diverse Video Generation using a Gaussian Process Trigger (ICLR 21)](https://www.cs.umd.edu/~gauravsh/dvg.html) by [Gaurav Shrivastava](https://www.cs.umd.edu/~gauravsh/) and [Abhinav Shrivastava](https://www.cs.umd.edu/~abhinav/). 
 
 
 
@@ -28,12 +28,17 @@ python generate_frames.py --data_root //path/to/the/data --image_width 64 --data
 
 To cite our work please use the following
 ```
-@inproceedings{
-shrivastava2021diverse,
-title={Diverse Video Generation using a Gaussian Process Trigger},
-author={Gaurav Shrivastava and Abhinav Shrivastava},
-booktitle={International Conference on Learning Representations},
-year={2021},
-url={https://openreview.net/forum?id=Qm7R_SdqTpT}
+@article{shrivastava2021diverse,
+  title={Diverse Video Generation using a Gaussian Process Trigger},
+  author={Shrivastava, Gaurav and Shrivastava, Abhinav},
+  journal={arXiv preprint arXiv:2107.04619},
+  year={2021}
+}
+
+@phdthesis{shrivastava2021diverse,
+  title={Diverse Video Generation},
+  author={Shrivastava, Gaurav},
+  year={2021},
+  school={University of Maryland, College Park}
 }
 ```
